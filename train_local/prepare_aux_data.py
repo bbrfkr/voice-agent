@@ -2,7 +2,7 @@
 RIR と背景ノイズを 16kHz mono WAV に整える（openWakeWord 学習の augment 用）。
 
   pip install -r requirements_dataprep.txt
-  python prepare_aux_data.py --data /data/oww [--audioset-count 4000]
+  python prepare_aux_data.py --data data/oww [--audioset-count 4000]
 
 出力:
   {data}/mit_rirs/*.wav     ← RIR（HuggingFace: davidscripka/MIT_environmental_impulse_responses）
@@ -98,7 +98,7 @@ def _safe(label, fn):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="/data/oww")
+    ap.add_argument("--data", default="data/oww")
     ap.add_argument("--fma-count", type=int, default=0,
                     help="FMA(music)の件数。rudraml/fma は新しい datasets では読めない"
                          "(スクリプト廃止)ため既定0=スキップ。使うなら datasets<3.0 が必要")

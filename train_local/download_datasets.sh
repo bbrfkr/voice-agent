@@ -2,14 +2,14 @@
 # openWakeWord ローカル学習に必要な大容量データを取得する。
 # 公式 notebook(automatic_model_training.ipynb) のDLセルと同じ物。
 #
-#   bash download_datasets.sh [DATA_DIR]   # 既定 /data/oww
+#   bash download_datasets.sh [DATA_DIR]   # 既定 data/oww
 #
 # 直接DLできる .npy 特徴ファイルのみここで取得。
 # RIR / 背景ノイズ(FMA・AudioSet) は HuggingFace datasets 経由なので prepare_aux_data.py で整える。
 # （AudioSet は Parquet 化され .tar 直DLは廃止。datasets ストリーミングで取得する）
 set -euo pipefail
 
-DATA="${1:-/data/oww}"
+DATA="${1:-data/oww}"
 mkdir -p "$DATA"
 cd "$DATA"
 echo "保存先: $DATA"

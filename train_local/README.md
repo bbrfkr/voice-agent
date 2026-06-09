@@ -10,35 +10,68 @@ Colab は使わず、**Linux / WSL2 + CUDA** 上で openWakeWord をローカル
 > 科学計算系 wheel がまだ揃っておらず、`torch` の import error・`torchcodec`・ソースビルド失敗
 > （`CCompiler` / build-essential 要求）等の**連鎖エラー**になる。3.12 の venv で一掃できる。
 >
-> **⚠️ さらに `scipy<1.15` をピンすること**（Python 版とは別問題）。openWakeWord 学習の依存
+> **⚠️ さらに `scipy<1.15` が必要**（Python 版とは別問題）。openWakeWord 学習の依存
 > `acoustics` が SciPy 1.15 で削除された `sph_harm` を使うため、新しい scipy だと
-> `ImportError: cannot import name 'sph_harm'` になる。→ `pip install "scipy<1.15"`。
+> `ImportError: cannot import name 'sph_harm'` になる。→ これと `torch==2.8.0` / `onnx` 等の
+> 必須ピンは手順1で入れる **`train_local/requirements.txt` に集約済み**（手動 pin 不要）。
 
 ## 手順
 
-### 1. 正例＋負例の音声を用意（VOICEVOX）
-WSL 側で実行する（`.env` の `VOICEVOX_URL` が指す VOICEVOX に接続。**マイクは使わない**）：
+### 1. 学習 venv を作る（Linux / WSL2）
+**必ず Python 3.11〜3.12 の venv** を使う（3.14 等は依存 wheel 未整備で連鎖エラーになる）。
+**この venv 1つで以降の全工程（音声生成・データ整形・学習）をまかなう**（docker compose 前の
+WSL 同一環境で完結。用途別に env を分けない）。**voice-agent リポジトリ直下**で実行：
+
+> ⚠️ **openwakeword は必ず git ソースから `-e` で入れる**。PyPI 版（`pip install openwakeword`）は
+> **推論専用で学習コードを含まない**ため、`train.py` が
+> `ImportError: cannot import name 'generate_adversarial_texts'` で落ちる。
+
 ```bash
+python3.12 -m venv .venv && source .venv/bin/activate
+
+git clone https://github.com/dscripka/openWakeWord
+# base（学習コード入りソース版。PyPI 版を上書き）＋全工程の依存を 1 回の解決でまとめて入れる。
+# openWakeWord の [full] extras は使わない（tensorflow 等 3.12 非対応の古いピンで scipy 1.6.1→
+# distutils ビルド失敗を誘発するため）。必要なピン（scipy<1.15 / torch==2.8.0 / torchcodec / onnx 等）は
+# requirements.txt に集約済み。理由は同ファイル冒頭コメント参照。
+pip install -e ./openWakeWord -r train_local/requirements.txt   # ↑ リポジトリ直下のまま実行（cd しない）
+# CUDA で回すなら torch をペアで入れ替え（RTX 5080=Blackwell は cu128 以降）:
+#   pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+# ↑ 依存で詰まる場合は後述「community trainer」を使う手もある
+
+# 特徴抽出モデル(melspectrogram.onnx / embedding_model.onnx)を取得（未取得だと学習時に NO_SUCHFILE）
+python -c "from openwakeword import utils; utils.download_models()"
+```
+
+### 2. 正例＋負例の音声を用意（VOICEVOX）
+WSL 側で実行する（`.env` の `VOICEVOX_URL` が指す VOICEVOX に接続。**マイクは使わない**）。
+手順1で作った venv を有効化した状態で、**voice-agent リポジトリ直下**から実行
+（スクリプトは `config.py` を import するため CWD はリポジトリ直下）：
+```bash
+source .venv/bin/activate   # 手順1で作成済み
+
 # 正例（ウェイクワード「ずんだもん」）。生成＋train/test 振り分けまで1コマンド
-python train_local/gen_samples.py           # → my_custom_model/zundamon/positive_train|test/
+python train_local/gen_samples.py     # → my_custom_model/zundamon/positive_train|test/
 
 # 負例（非ウェイクワード音声）。train.py は負例クリップが必須（空ディレクトリ不可）
-python train_local/gen_negatives.py         # → my_custom_model/zundamon/negative_train|test/
+python train_local/gen_negatives.py   # → my_custom_model/zundamon/negative_train|test/
 ```
 - `gen_negatives.py` は「こんにちは」等の一般語に加え、「ずんだ」「ずんだもち」等の**ハード負例**を
   VOICEVOX 多話者で合成。誤発火を減らす。件数が多く時間がかかる場合は `--max-styles 15` 等で抑制。
 
-#### 1.5. 自分の声を足す（誤発火/未発火が多いとき・強く推奨）
+#### 2.5. 自分の声を足す（誤発火/未発火が多いとき・強く推奨）
 VOICEVOX 合成だけだと生声で精度が出にくい。**自分の声の正例＋自分の声/部屋の負例**を
 `record_wakeword.py`（同梱）で録って足すと、実環境で激変する。WSL から実行する
 （マイクは **PulseAudio 経由**でホスト Windows から渡す。設定は [`../DOCKER.md`](../DOCKER.md) 参照）：
 
 > ⚠️ **生声は「合成データに“追加”」する。置き換えてはいけない**。
 > openWakeWord は大量データ前提で、生声 60 件“だけ”で学習すると**全く反応しなくなる**。
-> 必ず手順1（`gen_samples.py`＋`gen_negatives.py`＝合成 数千件）を済ませた
+> 必ず手順2（`gen_samples.py`＋`gen_negatives.py`＝合成 数千件）を済ませた
 > **上に**生声を足すこと。`gen_samples.py` / `record_wakeword.py` はどちらも既存ファイルを消さず
-> **追記**する（ファイル名が別系統なので衝突しない）。学習前に `python train_local/inspect_clips.py` で
+> **追記**する（ファイル名が別系統なので衝突しない）。学習前に
+> `python train_local/inspect_clips.py` で
 > `positive_train` が**数千件**あることを確認すると安全。
+`record_wakeword.py` も手順1の venv で実行（依存の `pvrecorder` / `numpy` は同梱済み）：
 ```bash
 # 正例：ビープ後に「ずんだもん」を1回ずつ。60回くらい（声色・距離・速さ・向きを変える）
 python train_local/record_wakeword.py --label positive --count 60
@@ -52,33 +85,25 @@ python train_local/record_wakeword.py --label negative --ambient --seconds 60
 - `record_wakeword.py` はエージェントと同じ **PvRecorder(16kHz mono)** で録音し、推論時と音響特性を
   揃える。既存の VOICEVOX クリップに**追記**（上書きしない）、train/test も自動振り分け。
 - 自分のペースで録りたいときは `--manual`（毎回 Enter で録音開始）。
+- 録音開始の合図ビープは **best-effort**（鳴らなくても録音は動く）。`sounddevice` は手順1で
+  同梱済みだが、WSL では追加で2つ必要：
+  1. PortAudio 本体（`（ビープ不可: PortAudio library not found）` が出る場合）と ALSA→pulse プラグイン：
+     ```bash
+     sudo apt-get install -y libportaudio2 libasound2-plugins
+     ```
+  2. ALSA の既定出力を PulseAudio に向ける（PortAudio は既定で ALSA を掴むが、WSL の既定 ALSA は
+     pulse に繋がっておらず**エラーは出ないのに無音**になる）。`~/.asoundrc` を作る：
+     ```bash
+     printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' > ~/.asoundrc
+     ```
+  これで `PULSE_SERVER`（`/mnt/wslg/PulseServer`）経由で Windows 側スピーカーから鳴る。
+  PvRecorder は元々 pulse を直接掴むため、録音自体はこの設定なしでも動く。
 - **未発火が多い**→正例を増やす（距離/声色のバリエーションを増やす）。
   **誤発火が多い**→負例（特に `--ambient` の環境音と、紛らわしい語）を増やす。
 - 録り足したら **手順4を `--overwrite` 付きで再実行**（新クリップから特徴を作り直す）。
 
-### 2. 学習環境を作る（Linux / WSL2）
-**必ず Python 3.11〜3.12 の venv** を使う（3.14 等は依存 wheel 未整備で連鎖エラーになる）：
-
-> ⚠️ **openwakeword は必ず git ソースから `-e` で入れる**。PyPI 版（`pip install openwakeword`）は
-> **推論専用で学習コードを含まない**ため、`train.py` が
-> `ImportError: cannot import name 'generate_adversarial_texts'` で落ちる。
-
-```bash
-python3.12 -m venv .venv && source .venv/bin/activate
-
-git clone https://github.com/dscripka/openWakeWord
-cd openWakeWord
-pip install -e .                            # ← ソース版（学習コード入り）。PyPI版を上書き
-pip install -r requirements_training.txt    # torch / torchaudio など（CUDA 版 torch を入れる）
-pip install "scipy<1.15"                     # ← 最後に固定（sph_harm 対策。巻き戻り防止）
-# ↑ 依存で詰まる場合は後述「community trainer」を使う手もある
-
-# 特徴抽出モデル(melspectrogram.onnx / embedding_model.onnx)を取得（未取得だと学習時に NO_SUCHFILE）
-python -c "from openwakeword import utils; utils.download_models()"
-```
-
 ### 3. 大容量データセットを DL（数GB）— スクリプト同梱
-公式 notebook のDLセルと同じ物を、付属スクリプトで取得する（保存先 `/data/oww` は変更可）。
+公式 notebook のDLセルと同じ物を、付属スクリプトで取得する（保存先 `data/oww` は変更可）。
 
 > **前提: FFmpeg が必要**。`datasets` の音声デコード（torchcodec）が FFmpeg の共有
 > ライブラリ（libavcodec 等）に依存する。未導入だと `prepare_aux_data.py` 実行時に
@@ -89,28 +114,31 @@ python -c "from openwakeword import utils; utils.download_models()"
 
 ```bash
 # (a) 直接DL分: ネガティブ特徴(ACAV100M) / FP検証特徴（.npy 2種）
-bash train_local/download_datasets.sh /data/oww
+bash train_local/download_datasets.sh data/oww
 
 # (b) RIR と AudioSet を取得して 16kHz mono に整形（HuggingFace datasets 経由）
-pip install -r train_local/requirements_dataprep.txt
-python train_local/prepare_aux_data.py --data /data/oww
+#     dataprep の依存（datasets/librosa/soundfile/torchcodec）は requirements.txt に同梱済みなので、
+#     手順1の venv をそのまま使う（torchcodec は torch 2.8 対応版 0.6/0.7 にピン済みで競合しない）。
+source .venv/bin/activate   # 手順1の venv（未アクティブなら）
+python train_local/prepare_aux_data.py --data data/oww
 ```
 
 > **背景ノイズについて**: 音楽データセット FMA(`rudraml/fma`) は読み込みスクリプト方式で、
 > 新しい `datasets`(>=3.0) では `RuntimeError: Dataset scripts are no longer supported` となり
 > 読めない。そのため**既定でスキップ**し、背景ノイズは **AudioSet のみ**で賄う（学習には十分）。
-> どうしても FMA も使いたい場合は `--fma-count 1000` を付け、かつ `pip install "datasets<3.0"` が要る。
+> どうしても FMA も使いたい場合は `--fma-count 1000` を付け、かつ `datasets<3.0` が要る
+> （手順1の venv で `pip install 'datasets<3.0'` を入れてから実行）。
 
 取得・生成されるもの → `config.yaml` の対応キー：
 
 | ファイル/ディレクトリ | config.yaml のキー |
 |---|---|
-| `/data/oww/openwakeword_features_ACAV100M_2000_hrs_16bit.npy` | `feature_data_files.ACAV100M` |
-| `/data/oww/validation_set_features.npy` | `false_positive_validation_data_path` |
-| `/data/oww/mit_rirs/` | `rir_paths` |
-| `/data/oww/noise_16k/`（AudioSet を16k化。FMAは既定スキップ） | `background_paths` |
+| `data/oww/openwakeword_features_ACAV100M_2000_hrs_16bit.npy` | `feature_data_files.ACAV100M` |
+| `data/oww/validation_set_features.npy` | `false_positive_validation_data_path` |
+| `data/oww/mit_rirs/` | `rir_paths` |
+| `data/oww/noise_16k/`（AudioSet を16k化。FMAは既定スキップ） | `background_paths` |
 
-同梱 `config.yaml` は既定でこのパスに合わせてある（`/data/oww` 以外にしたら書き換える）。
+同梱 `config.yaml` は既定でこのパスに合わせてある（`data/oww` 以外にしたら書き換える）。
 
 参照元（URL/スキーマがバージョンで変わったらここを確認）:
 - 特徴 .npy: HuggingFace `davidscripka/openwakeword_features`
@@ -120,7 +148,7 @@ python train_local/prepare_aux_data.py --data /data/oww
 
 ### 4. 学習を実行
 同梱の **`train_local/train.py`**（openWakeWord の trainer）を**リポジトリのルートから**実行する
-（手順2でソース版 openwakeword を `pip install -e` 済みなのが前提。`train.py` はその openwakeword を import する）。
+（手順1でソース版 openwakeword を `pip install -e` 済みなのが前提。`train.py` はその openwakeword を import する）。
 正例を自前供給するので **`--generate_clips` は付けない**。正例を先置きする都合上
 **`--overwrite` を付けて**特徴生成を確実に走らせる（無いと「features already exist」で
 スキップ→ `positive_features_test.npy` 不在で落ちる）：
@@ -143,7 +171,8 @@ compose が `/app/zundamon.onnx` に自動上書きするので設定不要。WS
 
 - **`OSError: ... libtorchcodec_core4.so`** → FFmpeg 未導入。`sudo apt-get install -y ffmpeg`。
 - **`RuntimeError: Dataset scripts are no longer supported, but found fma.py`** → FMA は新しい
-  `datasets` で読めない。既定でスキップ済み（AudioSet で代替）。使うなら `pip install "datasets<3.0"`。
+  `datasets` で読めない。既定でスキップ済み（AudioSet で代替）。使うなら手順1の venv で
+  `pip install 'datasets<3.0'` を入れる。
 - **`ImportError: cannot import name 'sph_harm' from scipy.special`** → openWakeWord 学習の依存
   `acoustics`（`acoustics/directivity.py`）が旧 API `sph_harm` を import するが、**SciPy 1.15 で
   `sph_harm` は削除**され `sph_harm_y` に改名された衝突。**scipy を下げれば直る**（Python 版とは無関係）：
@@ -165,19 +194,19 @@ compose が `/app/zundamon.onnx` に自動上書きするので設定不要。WS
   本エージェントは `OWW_FRAMEWORK="onnx"` で `.onnx` を直接使うため **tflite は不要**。
   `--convert_to_tflite` を**外して**実行すればよい（`onnx_tf` は TensorFlow 依存で壊れやすく、入れない）：
   ```bash
-  uv run python train_local/train.py --training_config train_local/config.yaml --train_model
+  python train_local/train.py --training_config train_local/config.yaml --train_model
   ```
   ※ どうしても tflite が要る場合のみ `onnx_tf` + 対応 TF を別途用意（非推奨）。
 - **`OnnxExporterError: Module onnx is not installed!` / `ModuleNotFoundError: No module named 'onnx'`（学習完了後の書き出しで落ちる）**
   → 学習自体は**完走している**が、`torch.onnx.export` に `onnx` 本体が要る。未導入だと最後の
   書き出しだけ失敗する（しかもチェックポイントは保存されないため、**入れてから再学習が必要**）。
   ```bash
-  uv pip install onnx        # ml-dtypes も一緒に入る
+  pip install onnx           # ml-dtypes も一緒に入る
   ```
   特徴量 `.npy` はキャッシュ済みなので、再学習は `--overwrite`/`--augment_clips` を**外して**
   学習＋書き出しだけ回せばよい（特徴生成・augmentation はスキップされ速い）：
   ```bash
-  uv run python train_local/train.py --training_config train_local/config.yaml --train_model --convert_to_tflite
+  python train_local/train.py --training_config train_local/config.yaml --train_model --convert_to_tflite
   ```
 - **`AttributeError: 'int' object has no attribute 'items'`（学習ループ開始直後・`data.py` 内）**
   → `config.yaml` の `batch_n_per_class` を**スカラー（`1024` 等）にしている**のが原因。train.py は
@@ -211,4 +240,4 @@ compose が `/app/zundamon.onnx` に自動上書きするので設定不要。WS
   が compat パッチ込みの 13 ステップ構成。これに VOICEVOX 正例を流す手もある。
 - **ネガティブ不足のエラー** → `custom_negative_phrases` を設定して `--generate_clips` も付ける
   （この場合のみ Piper が必要）。
-- **生声で反応しにくい** → 手順1の自声追加を増やす／`OWW_THRESHOLD` を下げる。
+- **生声で反応しにくい** → 手順2.5の自声追加を増やす／`OWW_THRESHOLD` を下げる。

@@ -1,0 +1,60 @@
+# openWakeWord ローカル学習の全工程用の依存（Python 3.11〜3.12 / ONNX 出力）
+#
+# openWakeWord をソースから `pip install -e .` した上で追加する依存＋必須ピン。
+# この1ファイル＝1つの venv で全工程をまかなう（docker compose 前の WSL 同一環境で完結）:
+#   音声生成(gen_samples/gen_negatives/record_wakeword, 手順2) / データ整形(prepare_aux_data, 手順3b)
+#   / 学習(train.py, 手順4)。旧 requirements_dataprep.txt・requirements-datagen は廃止し本ファイルに集約。
+# 使い方（手順1）:
+#   python3.12 -m venv .venv && source .venv/bin/activate
+#   git clone https://github.com/dscripka/openWakeWord
+#   pip install -e ./openWakeWord -r train_local/requirements.txt   # voice-agent 直下で実行
+#   # CUDA で回すなら torch をペアで入れ替え（RTX 5080=Blackwell は cu128 以降）:
+#   #   pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+#
+# なぜ openWakeWord の [full] extras / requirements_training.txt を使わないか:
+#   [full] は tensorflow-cpu==2.8.1 等 2022 年世代の古いピンを含み Python 3.12 用 wheel が無い。
+#   resolver が scipy を 1.6.1 まで後退させ、3.12 で削除された distutils を要求してビルドが落ちる。
+#   TF/onnx_tf 系は tflite 変換と Piper クリップ生成でしか使わない（本構成では不要）。
+#   → base（scipy>=1.3,<2）＋下の学習用だけで py3.12 で解決する（検証済: scipy 1.14.1 / torch 2.8.0）。
+#
+# 各ピンの理由（README「うまくいかない時」に対応）:
+#   scipy<1.15        … acoustics が SciPy 1.15 で削除された sph_harm を import するため
+#                       （新しい scipy だと ImportError: cannot import name 'sph_harm'）
+#   torch/torchaudio==2.8.0 … torchaudio.info は 2.9 で削除。torch_audiomentations が旧 API を
+#                       呼ぶため、ペアで 2.8 に固定（AttributeError: 'torchaudio' has no attribute 'info' 対策）
+#   torchcodec>=0.6,<0.8 … dataprep(prepare_aux_data.py)の音声デコード用。torch 2.8 対応は 0.6/0.7。
+#                       無印（最新）だと torch 2.9 を要求し torch==2.8.0 と競合するため上限を固定。
+#   onnx              … 学習完了後の torch.onnx.export に必須（無いと最後の書き出しだけ失敗）
+
+# ── 学習(train.py) ──
+torch==2.8.0
+torchaudio==2.8.0
+torchinfo>=1.8.0,<2
+torchmetrics>=0.11.4,<1     # コードが使う旧 API のため <1 を維持
+speechbrain>=0.5.14,<1      # data.py の dataio/signal_processing API のため <1 を維持
+audiomentations>=0.30.0,<1
+torch-audiomentations>=0.11.0,<1
+acoustics>=0.2.6,<1
+mutagen>=1.46.0,<2
+pronouncing>=0.2.0,<1
+pyyaml>=6.0,<7
+numpy<2                     # 旧学習コード/speechbrain 0.5.x は numpy 2.x 未対応
+scipy<1.15                  # acoustics の sph_harm 対策（上記理由）
+onnx                        # torch.onnx.export 用
+
+# ── データ整形(prepare_aux_data.py, 手順3b) ──
+# RIR/AudioSet を HuggingFace datasets から取得して 16kHz mono に整形する分。
+# torch/torchaudio/numpy/scipy 等は上の学習用と共有（同一 venv で競合しないピンに揃えてある）。
+datasets>=2.18
+librosa>=0.10
+soundfile>=0.12
+torchcodec>=0.6,<0.8        # torch 2.8 対応版（上記理由で上限固定）
+
+# ── 音声生成(gen_samples / gen_negatives / record_wakeword, 手順2) ──
+# VOICEVOX 合成は HTTP(requests)のみ、録音は PvRecorder。numpy は上で導入済み(<2)。
+requests>=2.31
+pvrecorder>=1.2.0
+# 録音開始の合図ビープ用（無くても録音は動く best-effort。非 Windows は record_wakeword.py が
+# これで鳴らす）。Linux wheel は PortAudio 同梱なので通常 apt(libportaudio2) 不要。WSLg では
+# PULSE_SERVER 経由で鳴る。鳴らない時のみ: sudo apt-get install -y libportaudio2 libasound2-plugins
+sounddevice>=0.4.6
