@@ -18,3 +18,6 @@ data/
 wake_samples/
 # 学習中間物 + 学習済み zundamon.onnx
 my_custom_model/
+
+# 手順1で各自 git clone する外部リポジトリ（学習コード入りソース版 openwakeword）
+openWakeWord/
