@@ -154,12 +154,14 @@ python train_local/prepare_aux_data.py --data data/oww
 スキップ→ `positive_features_test.npy` 不在で落ちる）：
 ```bash
 python train_local/train.py --training_config train_local/config.yaml \
-    --augment_clips --overwrite --train_model --convert_to_tflite
+    --augment_clips --overwrite --train_model
 ```
 - `--augment_clips`: 正例に RIR/ノイズを重畳し特徴量化
 - `--train_model`: 学習
-- `--convert_to_tflite`: tflite も出力
-- 完了で `my_custom_model/zundamon/zundamon.onnx`（+ `.tflite`）が出る
+- 完了で `my_custom_model/zundamon.onnx` が出る
+- **tflite は本構成では作らない**（`--convert_to_tflite` は付けない）。エージェントは
+  `OWW_FRAMEWORK="onnx"` で `.onnx` を直接使うため不要で、変換は `onnx_tf`＝TensorFlow 一式
+  （3.12 非対応の古いピン）を要求して壊れやすい。requirements.txt が TF/onnx_tf を除外しているのも同理由。
 
 ### 5. 配置
 出来た `zundamon.onnx` をリポジトリの **`my_custom_model/zundamon.onnx`** に置く
@@ -190,12 +192,9 @@ compose が `/app/zundamon.onnx` に自動上書きするので設定不要。WS
   スキップしているのに、特徴 .npy は未完成、という状態。**`--overwrite` を付けて再実行**（特徴を作り直す。
   入力 WAV は消えない）。それでも残るなら `my_custom_model/<name>/` 内の `*features*.npy` を手で消す。
 - **`ModuleNotFoundError: No module named 'onnx_tf'`（`--convert_to_tflite` の段で落ちる）**
-  → これは **tflite 変換だけの失敗**で、その手前で `my_custom_model/zundamon.onnx` は**既に出力済み**。
-  本エージェントは `OWW_FRAMEWORK="onnx"` で `.onnx` を直接使うため **tflite は不要**。
-  `--convert_to_tflite` を**外して**実行すればよい（`onnx_tf` は TensorFlow 依存で壊れやすく、入れない）：
-  ```bash
-  python train_local/train.py --training_config train_local/config.yaml --train_model
-  ```
+  → tflite 変換だけの失敗で、その手前で `my_custom_model/zundamon.onnx` は**既に出力済み**＝
+  実害なし。**本構成は tflite を作らない**（手順4のコマンドに `--convert_to_tflite` は付けない）。
+  エージェントは `OWW_FRAMEWORK="onnx"` で `.onnx` を直接使うため不要。
   ※ どうしても tflite が要る場合のみ `onnx_tf` + 対応 TF を別途用意（非推奨）。
 - **`OnnxExporterError: Module onnx is not installed!` / `ModuleNotFoundError: No module named 'onnx'`（学習完了後の書き出しで落ちる）**
   → 学習自体は**完走している**が、`torch.onnx.export` に `onnx` 本体が要る。未導入だと最後の
@@ -206,7 +205,7 @@ compose が `/app/zundamon.onnx` に自動上書きするので設定不要。WS
   特徴量 `.npy` はキャッシュ済みなので、再学習は `--overwrite`/`--augment_clips` を**外して**
   学習＋書き出しだけ回せばよい（特徴生成・augmentation はスキップされ速い）：
   ```bash
-  python train_local/train.py --training_config train_local/config.yaml --train_model --convert_to_tflite
+  python train_local/train.py --training_config train_local/config.yaml --train_model
   ```
 - **`AttributeError: 'int' object has no attribute 'items'`（学習ループ開始直後・`data.py` 内）**
   → `config.yaml` の `batch_n_per_class` を**スカラー（`1024` 等）にしている**のが原因。train.py は

@@ -41,6 +41,9 @@ pyyaml>=6.0,<7
 numpy<2                     # 旧学習コード/speechbrain 0.5.x は numpy 2.x 未対応
 scipy<1.15                  # acoustics の sph_harm 対策（上記理由）
 onnx                        # torch.onnx.export 用
+setuptools<81              # torchmetrics<1 が pkg_resources を import するため。setuptools 81 で
+                           # pkg_resources が同梱されなくなり ModuleNotFoundError になる（py3.12 venv は
+                           # setuptools 非同梱なので明示導入も兼ねる）
 
 # ── データ整形(prepare_aux_data.py, 手順3b) ──
 # RIR/AudioSet を HuggingFace datasets から取得して 16kHz mono に整形する分。
