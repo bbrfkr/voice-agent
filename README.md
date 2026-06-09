@@ -34,13 +34,15 @@
 
 | 作業 | スクリプト | 実行場所 | マイク |
 |---|---|---|---|
-| 正例サンプル生成 | `gen_samples.py` | WSL（VOICEVOX に接続） | 不要 |
-| 負例サンプル生成 | `gen_negatives.py` | WSL（VOICEVOX に接続） | 不要 |
-| モデル学習 | `train.py` / `train_local/` | WSL2 + CUDA | 不要 |
-| 自声の録音（任意・精度↑） | `record_wakeword.py` | WSL（PulseAudio 経由） | 要（PulseAudio で） |
+| 正例サンプル生成 | `train_local/gen_samples.py` | WSL（VOICEVOX に接続） | 不要 |
+| 負例サンプル生成 | `train_local/gen_negatives.py` | WSL（VOICEVOX に接続） | 不要 |
+| モデル学習 | `train_local/train.py` | WSL2 + CUDA | 不要 |
+| 自声の録音（任意・精度↑） | `train_local/record_wakeword.py` | WSL（PulseAudio 経由） | 要（PulseAudio で） |
 | エージェント実行 | `voice_agent.py` | WSL / Docker | 要（PulseAudio で） |
 
-> マイクを使う作業（自声録音・エージェント実行）も、**同じ PulseAudio 経由で WSL から**動く。
+> 学習一式は [`train_local/`](train_local/) に集約。**いずれもリポジトリのルートから**実行する
+> （`python train_local/xxx.py`）。マイクを使う作業（自声録音・エージェント実行）も、
+> **同じ PulseAudio 経由で WSL から**動く。
 > つまり Windows 上で別途やることは PulseAudio の起動以外に無い。
 
 ## クイックスタート（Docker Compose・推奨）
@@ -107,37 +109,39 @@ OPENCODE_MODEL_ID=...
 
 openWakeWord はアカウント不要だが、任意フレーズは **1回だけ学習**が要る。
 ここでは手元の **VOICEVOX で正例（ポジティブ）サンプルを量産**して使う（追加ツール不要）。
-**サンプル生成も学習も WSL 上で完結する**（マイクは使わない）。
+**サンプル生成も学習も WSL 上で完結する**（マイクは使わない）。学習関連の一式は
+[`train_local/`](train_local/) にまとまっており、**いずれもリポジトリのルートから**実行する。
 
 ### 1. 学習用サンプルの生成（VOICEVOX）
 VOICEVOX を起動しておく（`docker compose up -d voicevox` でも、ホストの `127.0.0.1:50021` でも可。
-`.env` の `VOICEVOX_URL` が指す先に繋ぐ）。
+`.env` の `VOICEVOX_URL` が指す先に繋ぐ）。正例・負例とも、生成と train/test 振り分けまでを
+1コマンドで行い `my_custom_model/zundamon/{positive,negative}_{train,test}/` に出力する：
 
 ```bash
-python gen_samples.py        # wake_samples/ に「ずんだもん」を全話者×韻律で大量合成（正例）
-python gen_negatives.py      # 非ウェイクワード音声（負例）。train.py は負例が必須
+python train_local/gen_samples.py     # 正例「ずんだもん」を全話者×韻律で大量合成＋振り分け
+python train_local/gen_negatives.py   # 負例（非ウェイクワード音声）。train.py は負例が必須
 ```
-- 表記ゆれを足したいときは `gen_samples.py` の `VARIANTS` を編集。
+- 表記ゆれを足したいときは `train_local/gen_samples.py` の `VARIANTS` を編集。
 
 ### 2. （任意・推奨）自分の声を足す
 VOICEVOX 合成だけだと生声で反応しづらいことがある。**自分の声**の正例＋自分の声/環境音の負例を
 足すと実環境で安定する。マイクを使うので **PulseAudio 経由で WSL から**録る（[`DOCKER.md`](DOCKER.md) 参照）：
 
 ```bash
-python record_wakeword.py --label positive --count 60   # ビープ後に「ずんだもん」を1回ずつ
-python record_wakeword.py --label negative --count 40   # 紛らわしい語/雑談
-python record_wakeword.py --label negative --ambient --seconds 60  # 環境音
+python train_local/record_wakeword.py --label positive --count 60   # ビープ後に「ずんだもん」を1回ずつ
+python train_local/record_wakeword.py --label negative --count 40   # 紛らわしい語/雑談
+python train_local/record_wakeword.py --label negative --ambient --seconds 60  # 環境音
 ```
-> 生声は合成データに**追加**する（置き換えない）。詳細は [`train_local/README.md`](train_local/README.md)。
+> 生声は合成データに**追加**する（置き換えない。手順1のクリップとはファイル名系統が別で衝突しない）。
+> 件数確認は `python train_local/inspect_clips.py`。詳細は [`train_local/README.md`](train_local/README.md)。
 
 ### 3. 学習（Linux / WSL2 + CUDA）
 詳細手順・依存の注意（Python 3.11〜3.12、`scipy<1.15` 等）は
 [`train_local/README.md`](train_local/README.md) を参照：
 
 ```bash
-python train_local/split_samples.py   # 正例を train/test に振り分け
 # openWakeWord を学習（--generate_clips は付けない＝Piper不要）
-python train.py --training_config train_local/config.yaml \
+python train_local/train.py --training_config train_local/config.yaml \
     --augment_clips --overwrite --train_model
 ```
 - 大容量データセット（ネガティブ特徴・RIR・背景ノイズ, 数十GB）の DL が前提（`train_local/README.md`）。

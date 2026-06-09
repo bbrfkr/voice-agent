@@ -5,16 +5,11 @@ __pycache__/
 *.pyc
 *.pyo
 
-# 学習用の巨大データ（実行時は不要）
+# 学習用の巨大データ・学習スクリプト一式（実行時は不要）
 data/
 wake_samples/
-my_custom_model/zundamon/
+my_custom_model/
 train_local/
-train.py
-gen_samples.py
-gen_negatives.py
-inspect_clips.py
-record_wakeword.py
 notebooks/
 
 # 秘密情報はイメージに焼かない（config.py は env 駆動ローダなので焼いてよい。実値は .env を runtime 注入）

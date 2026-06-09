@@ -19,12 +19,11 @@ Colab は使わず、**Linux / WSL2 + CUDA** 上で openWakeWord をローカル
 ### 1. 正例＋負例の音声を用意（VOICEVOX）
 WSL 側で実行する（`.env` の `VOICEVOX_URL` が指す VOICEVOX に接続。**マイクは使わない**）：
 ```bash
-# 正例（ウェイクワード「ずんだもん」）
-python gen_samples.py                       # wake_samples/ に大量の「ずんだもん」WAV
-python train_local/split_samples.py         # → my_custom_model/zundamon/positive_train|test/
+# 正例（ウェイクワード「ずんだもん」）。生成＋train/test 振り分けまで1コマンド
+python train_local/gen_samples.py           # → my_custom_model/zundamon/positive_train|test/
 
 # 負例（非ウェイクワード音声）。train.py は負例クリップが必須（空ディレクトリ不可）
-python gen_negatives.py                      # → my_custom_model/zundamon/negative_train|test/
+python train_local/gen_negatives.py         # → my_custom_model/zundamon/negative_train|test/
 ```
 - `gen_negatives.py` は「こんにちは」等の一般語に加え、「ずんだ」「ずんだもち」等の**ハード負例**を
   VOICEVOX 多話者で合成。誤発火を減らす。件数が多く時間がかかる場合は `--max-styles 15` 等で抑制。
@@ -36,19 +35,19 @@ VOICEVOX 合成だけだと生声で精度が出にくい。**自分の声の正
 
 > ⚠️ **生声は「合成データに“追加”」する。置き換えてはいけない**。
 > openWakeWord は大量データ前提で、生声 60 件“だけ”で学習すると**全く反応しなくなる**。
-> 必ず手順1（`gen_samples.py`＋`split_samples.py`＋`gen_negatives.py`＝合成 数千件）を済ませた
-> **上に**生声を足すこと。`record_wakeword.py` / `split_samples.py` はどちらも既存ファイルを消さず
-> **追記**する（ファイル名が別系統なので衝突しない）。学習前に `python inspect_clips.py` で
+> 必ず手順1（`gen_samples.py`＋`gen_negatives.py`＝合成 数千件）を済ませた
+> **上に**生声を足すこと。`gen_samples.py` / `record_wakeword.py` はどちらも既存ファイルを消さず
+> **追記**する（ファイル名が別系統なので衝突しない）。学習前に `python train_local/inspect_clips.py` で
 > `positive_train` が**数千件**あることを確認すると安全。
 ```bash
 # 正例：ビープ後に「ずんだもん」を1回ずつ。60回くらい（声色・距離・速さ・向きを変える）
-python record_wakeword.py --label positive --count 60
+python train_local/record_wakeword.py --label positive --count 60
 
 # 負例：自分の声で“紛らわしい語/雑談”（ずんだ・ずんだもち・こんにちは 等、毎回違う言葉）
-python record_wakeword.py --label negative --count 40
+python train_local/record_wakeword.py --label negative --count 40
 
 # 負例：部屋の環境音（無言で生活音・TV など）。誤発火の抑制に効く
-python record_wakeword.py --label negative --ambient --seconds 60
+python train_local/record_wakeword.py --label negative --ambient --seconds 60
 ```
 - `record_wakeword.py` はエージェントと同じ **PvRecorder(16kHz mono)** で録音し、推論時と音響特性を
   揃える。既存の VOICEVOX クリップに**追記**（上書きしない）、train/test も自動振り分け。
@@ -120,12 +119,13 @@ python train_local/prepare_aux_data.py --data /data/oww
   `datasets` ストリーミングで取得）/ `rudraml/fma`(small)
 
 ### 4. 学習を実行
-**クローンした openWakeWord リポジトリ内の `train.py`** を使う（ソース版 openwakeword と対）。
+同梱の **`train_local/train.py`**（openWakeWord の trainer）を**リポジトリのルートから**実行する
+（手順2でソース版 openwakeword を `pip install -e` 済みなのが前提。`train.py` はその openwakeword を import する）。
 正例を自前供給するので **`--generate_clips` は付けない**。正例を先置きする都合上
 **`--overwrite` を付けて**特徴生成を確実に走らせる（無いと「features already exist」で
 スキップ→ `positive_features_test.npy` 不在で落ちる）：
 ```bash
-python openWakeWord/train.py --training_config /path/to/voice-agent/train_local/config.yaml \
+python train_local/train.py --training_config train_local/config.yaml \
     --augment_clips --overwrite --train_model --convert_to_tflite
 ```
 - `--augment_clips`: 正例に RIR/ノイズを重畳し特徴量化
@@ -154,7 +154,7 @@ compose が `/app/zundamon.onnx` に自動上書きするので設定不要。WS
 - **`torch` の import error / torch・torchcodec が入らない** → 多くは Python 3.13/3.14 で
   wheel が無いのが原因。3.11〜3.12 の venv にすると解決することが多い。
 - **`FileNotFoundError: .../negative_train`** → 負例クリップが無い。train.py は負例特徴を必須に
-  使うため空ディレクトリ不可。`python gen_negatives.py` で VOICEVOX 負例を用意してから再実行
+  使うため空ディレクトリ不可。`python train_local/gen_negatives.py` で VOICEVOX 負例を用意してから再実行
   （`--generate_clips`=piper を使わない本構成での代替）。
 - **`Openwakeword features already exist, skipping...` → 直後に `FileNotFoundError: positive_features_test.npy`**
   → 前回の失敗 run の中間物や、先置きした `positive_train/test` を「生成済み」と誤判定し特徴生成を
@@ -165,7 +165,7 @@ compose が `/app/zundamon.onnx` に自動上書きするので設定不要。WS
   本エージェントは `OWW_FRAMEWORK="onnx"` で `.onnx` を直接使うため **tflite は不要**。
   `--convert_to_tflite` を**外して**実行すればよい（`onnx_tf` は TensorFlow 依存で壊れやすく、入れない）：
   ```bash
-  uv run python train.py --training_config train_local/config.yaml --train_model
+  uv run python train_local/train.py --training_config train_local/config.yaml --train_model
   ```
   ※ どうしても tflite が要る場合のみ `onnx_tf` + 対応 TF を別途用意（非推奨）。
 - **`OnnxExporterError: Module onnx is not installed!` / `ModuleNotFoundError: No module named 'onnx'`（学習完了後の書き出しで落ちる）**
@@ -177,7 +177,7 @@ compose が `/app/zundamon.onnx` に自動上書きするので設定不要。WS
   特徴量 `.npy` はキャッシュ済みなので、再学習は `--overwrite`/`--augment_clips` を**外して**
   学習＋書き出しだけ回せばよい（特徴生成・augmentation はスキップされ速い）：
   ```bash
-  uv run python train.py --training_config train_local/config.yaml --train_model --convert_to_tflite
+  uv run python train_local/train.py --training_config train_local/config.yaml --train_model --convert_to_tflite
   ```
 - **`AttributeError: 'int' object has no attribute 'items'`（学習ループ開始直後・`data.py` 内）**
   → `config.yaml` の `batch_n_per_class` を**スカラー（`1024` 等）にしている**のが原因。train.py は

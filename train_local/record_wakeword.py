@@ -12,15 +12,15 @@
   - 既存の VOICEVOX クリップに「追記」する（上書きしない）
   - train/test に自動振り分け
 
-使い方（voice-agent ルートから / config.py が必要）:
+使い方（リポジトリのルートから実行 / config.py が必要）:
   # 正例（「ずんだもん」を 60 回。ビープ後に1回ずつ言う）
-  python record_wakeword.py --label positive --count 60
+  python train_local/record_wakeword.py --label positive --count 60
 
   # 負例：自分の声で“紛らわしい語”や雑談を録る
-  python record_wakeword.py --label negative --count 40
+  python train_local/record_wakeword.py --label negative --count 40
 
   # 負例：部屋の環境音（無言で生活音・TV など）。--ambient で連続録音を分割保存
-  python record_wakeword.py --label negative --ambient --seconds 60
+  python train_local/record_wakeword.py --label negative --ambient --seconds 60
 
   オプション:
     --seconds 1.8     1クリップの長さ（通常録音時）。ambient時は総録音秒数
@@ -39,6 +39,8 @@ import argparse
 import numpy as np
 from pvrecorder import PvRecorder
 
+# train_local/ から実行されるため、リポジトリ直下の config.py を import 可能にする
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config as C
 
 SAMPLE_RATE = 16000

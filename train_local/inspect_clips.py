@@ -2,8 +2,8 @@
 学習用クリップの健全性チェック。録音した正例/負例が無音・極端に短い・声が切れていないかを
 ざっと数値で確認する（再学習で反応しなくなった時の原因切り分け用）。
 
-使い方（voice-agent ルートから）:
-  python inspect_clips.py [--dir my_custom_model/zundamon]
+使い方（リポジトリのルートから実行）:
+  python train_local/inspect_clips.py [--dir my_custom_model/zundamon]
 """
 
 import os

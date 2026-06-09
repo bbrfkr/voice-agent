@@ -9,8 +9,8 @@ openWakeWord の negative_train / negative_test に直接振り分ける。
   「ずんだ」「ずんだもち」等の“似て非なる”ハード負例を混ぜると誤発火が減る。
 
 前提: VOICEVOX 起動中。先に gen_samples.py（正例）を済ませておくこと。
-使い方（voice-agent ルートから）:
-  python gen_negatives.py [--out my_custom_model/zundamon] [--test-ratio 0.1] [--max-styles N]
+使い方（リポジトリのルートから実行）:
+  python train_local/gen_negatives.py [--out my_custom_model/zundamon] [--test-ratio 0.1] [--max-styles N]
 """
 
 import os
