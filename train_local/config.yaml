@@ -1,0 +1,61 @@
+# openWakeWord ローカル学習 設定 —「ずんだもん」
+# 使い方は train_local/README.md（or プロジェクト README「ローカル学習」）参照。
+# 値の詳細は openWakeWord 公式 train.py / 付属 example config も参照のこと。
+
+# ── モデル / 学習 ──
+model_name: zundamon
+target_phrase:
+  - "ずんだもん"
+model_type: dnn                     # "dnn"（軽量・推奨）or "rnn"
+layer_size: 32
+steps: 50000                        # 学習ステップ。多いほど良くなるが頭打ち
+max_negative_weight: 1500
+target_false_positives_per_hour: 0.2
+# 1バッチに各クラスから何件取るか（合計が総バッチサイズ）。
+# キー名は feature_data_files のキー＋自動追加される positive / adversarial_negative に一致させること。
+# ⚠️ スカラー(例: 1024)はNG。train.py は dict を要求し、int だと
+#    `AttributeError: 'int' object has no attribute 'items'` で落ちる。
+batch_n_per_class:
+  ACAV100M: 1024
+  adversarial_negative: 50
+  positive: 50
+
+# ── 出力 ──
+# {output_dir}/{model_name}/ 配下に positive_train 等が作られ、
+# 学習後 {output_dir}/{model_name}/zundamon.onnx (+ .tflite) が出力される。
+output_dir: ./my_custom_model
+
+# ── 正例は VOICEVOX を自前供給（Piper 合成は使わない）──
+# --generate_clips を付けず、split_samples.py で下記へ振り分け済みにしておく:
+#   ./my_custom_model/zundamon/positive_train/
+#   ./my_custom_model/zundamon/positive_test/
+# 以下は合成を使う場合のみ参照（今回は未使用。空/小でOK）
+custom_negative_phrases: []
+n_samples: 1000
+n_samples_val: 100
+tts_batch_size: 50
+# train.py が起動時に無条件で `from generate_samples import generate_samples` するため、
+# 空だと ModuleNotFoundError。--generate_clips を使わない本構成では、import だけ満たす
+# stub ディレクトリを指す（voice-agent ルートから実行する前提の相対パス）。
+# 合成正例(Piper)も使うなら piper-sample-generator を clone してそのパスに変更。
+piper_sample_generator_path: "train_local/piper_stub"
+
+# ── データ拡張（残響/ノイズ重畳）──
+augmentation_rounds: 1
+augmentation_batch_size: 128
+# 背景ノイズ（audioset / FMA など。複数ディレクトリ可）
+background_paths:
+  - data/oww/noise_16k
+# 各 background_paths の複製率（要素数を background_paths と必ず一致させる）
+background_paths_duplication_rate:
+  - 1
+# 室内インパルス応答（MIT RIR survey など）
+rir_paths:
+  - data/oww/mit_rirs
+
+# ── 事前計算済みネガティブ特徴（大容量・要DL。notebook のDLセルと同じ物）──
+# 名前 → .npy ファイルパス の辞書
+feature_data_files:
+  ACAV100M: data/oww/openwakeword_features_ACAV100M_2000_hrs_16bit.npy
+# 誤検出率(FP)測定用の検証特徴
+false_positive_validation_data_path: data/oww/validation_set_features.npy

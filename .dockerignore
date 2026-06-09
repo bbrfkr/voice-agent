@@ -1,0 +1,27 @@
+# ── 実行イメージに含めないもの（ビルドコンテキストを軽く保つ） ──
+# 仮想環境・キャッシュ
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# 学習用の巨大データ（実行時は不要）
+data/
+wake_samples/
+my_custom_model/zundamon/
+train_local/
+train.py
+gen_samples.py
+gen_negatives.py
+inspect_clips.py
+record_wakeword.py
+notebooks/
+
+# 秘密情報はイメージに焼かない（config.py は env 駆動ローダなので焼いてよい。実値は .env を runtime 注入）
+.env
+*.Zone.Identifier
+
+# git / エディタ
+.git/
+.gitignore
+.python-version

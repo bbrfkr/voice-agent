@@ -1,0 +1,20 @@
+# 秘密情報・ローカル設定（コミットしない）
+# config.py は env 駆動ローダ（秘密なし）なのでコミット対象。実値は .env にだけ置く。
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Windows のダウンロード由来メタ（.Zone.Identifier / :Zone.Identifier 両方）
+*Zone.Identifier
+
+# ── 学習用の巨大データ / 生成物・学習済みモデル（再生成・再DL 可能なので追跡しない） ──
+# DL したデータセット（RIR/ノイズ/特徴量, 数十GB）
+data/
+# VOICEVOX で生成した正例サンプル
+wake_samples/
+# 学習中間物 + 学習済み zundamon.onnx
+my_custom_model/
