@@ -17,7 +17,7 @@ Colab は使わず、**Linux / WSL2 + CUDA** 上で openWakeWord をローカル
 ## 手順
 
 ### 1. 正例＋負例の音声を用意（VOICEVOX）
-Windows / VOICEVOX 側で：
+WSL 側で実行する（`.env` の `VOICEVOX_URL` が指す VOICEVOX に接続。**マイクは使わない**）：
 ```bash
 # 正例（ウェイクワード「ずんだもん」）
 python gen_samples.py                       # wake_samples/ に大量の「ずんだもん」WAV
@@ -31,7 +31,8 @@ python gen_negatives.py                      # → my_custom_model/zundamon/nega
 
 #### 1.5. 自分の声を足す（誤発火/未発火が多いとき・強く推奨）
 VOICEVOX 合成だけだと生声で精度が出にくい。**自分の声の正例＋自分の声/部屋の負例**を
-`record_wakeword.py`（同梱）で録って足すと、実環境で激変する。マイクのある Windows 側で実行：
+`record_wakeword.py`（同梱）で録って足すと、実環境で激変する。WSL から実行する
+（マイクは **PulseAudio 経由**でホスト Windows から渡す。設定は [`../DOCKER.md`](../DOCKER.md) 参照）：
 
 > ⚠️ **生声は「合成データに“追加”」する。置き換えてはいけない**。
 > openWakeWord は大量データ前提で、生声 60 件“だけ”で学習すると**全く反応しなくなる**。
@@ -133,8 +134,10 @@ python openWakeWord/train.py --training_config /path/to/voice-agent/train_local/
 - 完了で `my_custom_model/zundamon/zundamon.onnx`（+ `.tflite`）が出る
 
 ### 5. 配置
-`zundamon.onnx` を Windows の `C:\voice-agent\` にコピー →
-`config.py` の `OWW_MODEL_PATH` に設定。
+出来た `zundamon.onnx` をリポジトリの **`my_custom_model/zundamon.onnx`** に置く
+（compose がこのパスをコンテナにマウントする）。Docker では `.env` の `OWW_MODEL_PATH` は
+compose が `/app/zundamon.onnx` に自動上書きするので設定不要。WSL 直実行時のみ
+`.env` の `OWW_MODEL_PATH` をこのパスに合わせる。
 
 ## うまくいかない時
 
