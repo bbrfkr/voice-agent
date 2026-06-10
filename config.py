@@ -55,6 +55,13 @@ _load_dotenv()
 OWW_MODEL_PATH = _env("OWW_MODEL_PATH", "my_custom_model/zundamon.onnx")
 OWW_FRAMEWORK  = _env("OWW_FRAMEWORK", "onnx")     # "onnx" または "tflite"
 OWW_THRESHOLD  = _env("OWW_THRESHOLD", 0.5)        # 検出閾値 0.0〜1.0。高いほど誤検出減
+# 誤発火対策（どちらも 0 で無効）:
+#   OWW_VAD_THRESHOLD: openWakeWord 内蔵 Silero VAD のゲート。「人の声」でない物音の発火を抑止。
+#                      0.3〜0.7 で調整（高いほど厳しい）。
+#   WAKE_MIN_RMS     : 直近約1秒の最大 RMS がこの値未満なら発火を無視。静かな環境での
+#                      ノイズ起因の発火を抑止。[wake] ログの rms= を見て決める。
+OWW_VAD_THRESHOLD = _env("OWW_VAD_THRESHOLD", 0.0)
+WAKE_MIN_RMS      = _env("WAKE_MIN_RMS", 0)
 
 # ───────────────────────── 録音 / VAD（発話区間の検出） ─────────────────────────
 INPUT_DEVICE_INDEX = _env("INPUT_DEVICE_INDEX", -1)   # マイクのデバイス番号。-1 で既定デバイス
@@ -131,6 +138,7 @@ OPENCODE_MODEL_ID    = _env("OPENCODE_MODEL_ID", "gemma")
 VOICEVOX_URL     = _env("VOICEVOX_URL", "http://127.0.0.1:50021")
 VOICEVOX_SPEAKER = _env("VOICEVOX_SPEAKER", 3)     # 話者ID（/speakers で一覧確認）
 VOICEVOX_SPEED   = _env("VOICEVOX_SPEED", 1.0)     # 話速
+VOICEVOX_VOLUME  = _env("VOICEVOX_VOLUME", 1.0)    # 音量倍率。2.0 を超える辺りから音割れに注意
 
 # ───────────────────────── 発火時の合図 ─────────────────────────
 ACK_MODE       = _env("ACK_MODE", "voice")   # "voice"/"beep"/"both"/"off"

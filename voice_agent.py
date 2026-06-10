@@ -19,6 +19,7 @@ import json
 import glob
 import queue
 import threading
+from collections import deque
 
 
 def _register_cuda_dll_dirs():
@@ -92,16 +93,28 @@ class WakeWord:
     ウェイクワード待受と、バージイン(wakeword モード)で共用する。"""
 
     def __init__(self):
-        # 共有の特徴抽出モデル（melspectrogram / embedding）を必要なら取得
+        # 共有の特徴抽出モデル（melspectrogram / embedding / silero VAD）を必要なら取得
         try:
             openwakeword.utils.download_models(model_names=[])
         except Exception:
             pass
-        self.model = OWWModel(
-            wakeword_models=[C.OWW_MODEL_PATH],
-            inference_framework=C.OWW_FRAMEWORK,
-        )
+        kwargs = dict(wakeword_models=[C.OWW_MODEL_PATH],
+                      inference_framework=C.OWW_FRAMEWORK)
+        # 誤発火対策①: openWakeWord 内蔵の Silero VAD で「人の声」以外をゲートする
+        self.vad_threshold = getattr(C, "OWW_VAD_THRESHOLD", 0.0)
+        if self.vad_threshold > 0:
+            try:
+                self.model = OWWModel(vad_threshold=self.vad_threshold, **kwargs)
+            except Exception as e:
+                print(f"[wake] VAD 付き初期化に失敗、VAD なしで続行: {e}", file=sys.stderr)
+                self.vad_threshold = 0.0
+                self.model = OWWModel(**kwargs)
+        else:
+            self.model = OWWModel(**kwargs)
         self.threshold = C.OWW_THRESHOLD
+        # 誤発火対策②: 直近約1秒の入力 RMS がこの値未満なら発火を無視（0 で無効）
+        self.min_rms = getattr(C, "WAKE_MIN_RMS", 0)
+        self._rms_hist = deque(maxlen=12)   # 80ms × 12 ≒ 直近1秒
         # OWW_DEBUG=True で、声に対する検出スコアを表示（閾値調整・感度確認用）。
         # 既定 True（診断中）。安定したら config.py に OWW_DEBUG=False を足す。
         self.debug = getattr(C, "OWW_DEBUG", True)
@@ -109,14 +122,22 @@ class WakeWord:
 
     def process(self, pcm) -> bool:
         arr = np.asarray(pcm, dtype=np.int16)
+        rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
+        self._rms_hist.append(rms)
         scores = self.model.predict(arr)
         mx = max(scores.values()) if scores else 0.0
         self.last_score = float(mx)
+        hit = mx >= self.threshold
+        loud = int(max(self._rms_hist))
+        if hit and self.min_rms > 0 and loud < self.min_rms:
+            if self.debug:
+                print(f"[wake] score={mx:.2f} だが直近RMS {loud} < 下限 {self.min_rms} のため無視")
+            return False
         # 0.1 以上に上がった瞬間だけ出す（無音時の 0.00 連発を避ける）
         if self.debug and mx >= 0.1:
-            hit = "  ← 発火！" if mx >= self.threshold else ""
-            print(f"[wake] score={mx:.2f} (閾値 {self.threshold}){hit}")
-        return mx >= self.threshold
+            mark = "  ← 発火！" if hit else ""
+            print(f"[wake] score={mx:.2f} rms={loud} (閾値 {self.threshold}){mark}")
+        return hit
 
     def reset(self):
         """検出直後に内部バッファを消し、連続誤発火を防ぐ。"""
@@ -133,6 +154,7 @@ class Speaker:
         self.q: "queue.Queue[str|None]" = queue.Queue()
         self._interrupted = False
         self._anchor = None   # ユーザー発話完了時刻。次に音が鳴る直前に総遅延を表示する
+        self._stream = None   # 再生専用 OutputStream（再生スレッドだけが触る）
         self.worker = threading.Thread(target=self._run, daemon=True)
         self.worker.start()
 
@@ -155,9 +177,12 @@ class Speaker:
         self._interrupted = False
 
     def interrupt(self):
-        """再生を即停止し、未再生のキューを捨てる（バージイン用）。"""
+        """再生を即停止し、未再生のキューを捨てる（バージイン用）。
+        注意: ここで sd.stop() 等の PortAudio 呼び出しはしない。再生スレッドの
+        sd.play()/sd.wait() と別スレッドの sd.stop() が重なると PortAudio 内部で
+        デッドロックすることがある（バージイン時に全体がスタックする既知症状）。
+        停止は _play() のチャンクループがフラグを見て自前で行う（〜0.1s で反応）。"""
         self._interrupted = True
-        sd.stop()  # 再生中の sd.wait() を解除
         while True:
             try:
                 self.q.get_nowait()
@@ -180,12 +205,34 @@ class Speaker:
                     if self._anchor is not None:
                         print(f"[total] 発話完了→応答音声 {time.monotonic() - self._anchor:.2f}s")
                         self._anchor = None
-                    sd.play(data, sr)
-                    sd.wait()
+                    self._play(data, sr)
             except Exception as e:
                 print(f"[TTS error] {e}", file=sys.stderr)
             finally:
                 self.q.task_done()
+
+    def _play(self, data, sr):
+        """専用 OutputStream にチャンクで書き込み、合間に割り込みフラグを確認する。
+        再生に関わる PortAudio 呼び出しをこのスレッドだけに閉じ込めるのが目的
+        （sd.play/sd.stop のスレッド間競合によるデッドロック回避）。
+        書き終えたら stop() で必ず止める。流しっぱなしにすると無音アイドル中に
+        underrun を撒き散らし、PulseAudio ごと不安定になってマイク入力まで死ぬ。"""
+        channels = data.shape[1] if data.ndim > 1 else 1
+        st = self._stream
+        if st is None or st.samplerate != sr or st.channels != channels:
+            if st is not None:
+                st.close()
+            st = self._stream = sd.OutputStream(samplerate=sr, channels=channels,
+                                                dtype="float32")
+        if st.stopped:
+            st.start()
+        step = max(256, int(sr * 0.05))   # 約50msごとにフラグを見る
+        for i in range(0, len(data), step):
+            if self._interrupted:
+                st.abort()   # バッファに残った音も捨てて即黙る（同一スレッドなので安全）
+                return
+            st.write(np.ascontiguousarray(data[i:i + step]))
+        st.stop()   # 書いた分を鳴らし切ってから停止（アイドル中の underrun 防止）
 
     def _synth(self, text: str):
         # 1) audio_query 2) synthesis の2段（VOICEVOX 標準）
@@ -198,6 +245,7 @@ class Speaker:
         q.raise_for_status()
         query = q.json()
         query["speedScale"] = C.VOICEVOX_SPEED
+        query["volumeScale"] = getattr(C, "VOICEVOX_VOLUME", 1.0)
         r = requests.post(
             f"{C.VOICEVOX_URL}/synthesis",
             params={"speaker": C.VOICEVOX_SPEAKER},
@@ -652,6 +700,30 @@ def _warmup(speaker: Speaker, messages, whisper):
     print(f"ウォームアップ完了（{time.monotonic() - t0:.1f}s）")
 
 
+# ───────────────────────────────── マイクの自己回復 ─────────────────────────────────
+def _recover_recorder(recorder, err):
+    """マイクが読めなくなったら作り直して復帰する。WSLg の PulseAudio は
+    出力側の不調などで瞬断することがあり、その際 PvRecorder.read() が
+    OSError を投げて戻らなくなるため、プロセスごと落とさず繋ぎ直す。"""
+    print(f"[audio] マイク読み取りに失敗、再初期化します: {err}", file=sys.stderr)
+    try:
+        recorder.delete()
+    except Exception:
+        pass
+    last = None
+    for _ in range(5):
+        time.sleep(1.0)
+        try:
+            r = PvRecorder(frame_length=FRAME_LENGTH,
+                           device_index=C.INPUT_DEVICE_INDEX)
+            r.start()
+            print("[audio] マイクを再初期化しました")
+            return r
+        except Exception as e:
+            last = e
+    raise RuntimeError(f"マイクを再初期化できませんでした: {last}")
+
+
 # ───────────────────────────────── メインループ ─────────────────────────────────
 def main():
     print("モデル読み込み中…")
@@ -680,7 +752,11 @@ def main():
     print('準備完了。「ずんだもん」と話しかけてください（Ctrl+C で終了）。')
     try:
         while True:
-            pcm = recorder.read()
+            try:
+                pcm = recorder.read()
+            except OSError as e:
+                recorder = _recover_recorder(recorder, e)
+                continue
             if not wake.process(pcm):
                 continue
             wake.reset()  # 検出直後にバッファを消して連続誤発火を防ぐ
@@ -691,8 +767,12 @@ def main():
             while True:
                 if beep_next:
                     acknowledge(speaker)
-                audio, t_speech_end = record_utterance(
-                    recorder, seed=seed, assume_started=(seed is not None))
+                try:
+                    audio, t_speech_end = record_utterance(
+                        recorder, seed=seed, assume_started=(seed is not None))
+                except OSError as e:
+                    recorder = _recover_recorder(recorder, e)
+                    break   # このターンは諦めてウェイクワード待ちへ
                 seed = None
                 if audio is None or len(audio) < SAMPLE_RATE * 0.3:
                     print("（聞き取れませんでした）")
