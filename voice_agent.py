@@ -81,6 +81,8 @@ FRAME_LENGTH = 1280   # 80ms。openWakeWord の推奨フレーム長
 
 # 文の区切り（ここで TTS に流す単位を切る）
 _SENT_BOUNDARY = re.compile(r"[。．！？!?\n]")
+# 早出し用の緩い区切り（読点を含む）。応答の1文目だけここで先に喋り出す。
+_SOFT_BOUNDARY = re.compile(r"[、，,。．！？!?\n]")
 _TASK_SENTINEL = "[[TASK]]"
 
 
@@ -130,8 +132,14 @@ class Speaker:
     def __init__(self):
         self.q: "queue.Queue[str|None]" = queue.Queue()
         self._interrupted = False
+        self._anchor = None   # ユーザー発話完了時刻。次に音が鳴る直前に総遅延を表示する
         self.worker = threading.Thread(target=self._run, daemon=True)
         self.worker.start()
+
+    def set_anchor(self, t: float | None):
+        """ユーザーの発話完了時刻を覚える。次の再生開始時に
+        『発話完了→応答音声』のトータル遅延を一度だけログする。"""
+        self._anchor = t
 
     def say(self, text: str):
         text = text.strip()
@@ -169,6 +177,9 @@ class Speaker:
                 wav = self._synth(text)
                 if wav is not None and not self._interrupted:
                     data, sr = sf.read(io.BytesIO(wav), dtype="float32")
+                    if self._anchor is not None:
+                        print(f"[total] 発話完了→応答音声 {time.monotonic() - self._anchor:.2f}s")
+                        self._anchor = None
                     sd.play(data, sr)
                     sd.wait()
             except Exception as e:
@@ -178,6 +189,7 @@ class Speaker:
 
     def _synth(self, text: str):
         # 1) audio_query 2) synthesis の2段（VOICEVOX 標準）
+        _t0 = time.monotonic()
         q = requests.post(
             f"{C.VOICEVOX_URL}/audio_query",
             params={"text": text, "speaker": C.VOICEVOX_SPEAKER},
@@ -194,6 +206,8 @@ class Speaker:
             timeout=60,
         )
         r.raise_for_status()
+        if getattr(C, "TURN_TIMING", True):
+            print(f"[tts] 合成 {time.monotonic() - _t0:.2f}s（{len(text)}字）")
         return r.content
 
 
@@ -229,9 +243,9 @@ def _drain(recorder):
     約1フレーム分ブロックする。その差で検出して止める。"""
     half = (recorder.frame_length / SAMPLE_RATE) * 0.5
     for _ in range(2000):
-        t0 = time.time()
+        t0 = time.monotonic()
         recorder.read()
-        if time.time() - t0 > half:
+        if time.monotonic() - t0 > half:
             break
 
 
@@ -324,6 +338,10 @@ def llm_stream(messages):
         "max_tokens": C.LLAMA_MAX_TOKENS,
         "stream": True,
     }
+    if getattr(C, "LLAMA_DISABLE_THINKING", False):
+        # thinking を切らないと、思考トークンを吐き終わるまで content が来ず
+        # 初回の音出しがまるごと遅れる（実測で TTFT 2.4s → 0.7s）。
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     headers = {"Authorization": f"Bearer {C.LLAMA_API_KEY}"}
     with requests.post(
         f"{C.LLAMA_BASE_URL}/chat/completions",
@@ -396,17 +414,37 @@ def _extract_text(obj) -> str:
 
 
 # ───────────────────────────────── ターン処理 ─────────────────────────────────
+def _trim_history(messages):
+    """system(先頭) + 直近 LLAMA_MAX_HISTORY 件だけ残す。長時間の会話で
+    プロンプトが伸び続けて TTFT が悪化するのを防ぐ。タスクの「作業結果」全文も
+    ここで自然に押し出される。先頭が assistant 始まりにならないよう調整する。"""
+    keep = getattr(C, "LLAMA_MAX_HISTORY", 20)
+    if keep <= 0 or len(messages) - 1 <= keep:
+        return
+    del messages[1:len(messages) - keep]
+    while len(messages) > 1 and messages[1]["role"] != "user":
+        del messages[1]
+
+
 def handle_turn(user_text, messages, speaker: Speaker, opencode: OpenCode, monitor):
     messages.append({"role": "user", "content": user_text})
+    _trim_history(messages)
 
     buffer = ""          # 生成テキスト全体
     sent_buf = ""        # TTS にまだ流していない端数
     decided = False      # 雑談/タスクの判定が済んだか
     is_task = False
+    first_done = False   # 1文目を喋り出したか（早出し制御）
+
+    t0 = time.monotonic()             # LLM 呼び出し開始（STT 完了直後）
+    t_first_token = None         # 最初のトークンが来た時刻
+    t_first_say = None           # 最初の音をキューに積んだ時刻
 
     for delta in llm_stream(messages):
         if monitor.triggered.is_set():   # バージインで中断
             break
+        if t_first_token is None:
+            t_first_token = time.monotonic()
         buffer += delta
 
         # 先頭を覗いて「雑談」か「[[TASK]]」かを一度だけ判定
@@ -416,18 +454,32 @@ def handle_turn(user_text, messages, speaker: Speaker, opencode: OpenCode, monit
                 continue  # まだ判定に足る文字が来ていない
             decided = True
             is_task = head.startswith(_TASK_SENTINEL)
-            if not is_task:
-                # ここまでの buffer は現 delta を既に含むので、そのまま発話対象に
-                # 引き継いで flush する。下の sent_buf += delta は通さない（二重発話防止）。
-                sent_buf = _flush_sentences(buffer, speaker)
-            continue
-
-        if is_task:
+            if is_task:
+                continue
+            # 雑談確定。ここまでの buffer は現 delta を既に含むので、そのまま発話対象へ。
+            sent_buf = buffer
+        elif is_task:
             continue  # タスク時は喋らず全文を貯める
+        else:
+            sent_buf += delta
 
-        # 雑談: 文が完成するたび TTS キューへ（生成と再生がパイプライン）
-        sent_buf += delta
+        # 雑談: 1文目は読点/文字数でも早出しし、初回の音出しを縮める。
+        # 2文目以降は文単位（1文目を喋る裏で生成されるので無音にならない）。
+        if not first_done:
+            sent_buf, flushed = _flush_first(sent_buf, speaker)
+            if not flushed:
+                continue
+            first_done = True
+            if t_first_say is None:
+                t_first_say = time.monotonic()
         sent_buf = _flush_sentences(sent_buf, speaker)
+
+    if getattr(C, "TURN_TIMING", True) and t_first_token is not None:
+        ttft = t_first_token - t0
+        if t_first_say is not None:
+            print(f"[turn] TTFT {ttft:.2f}s / 初音 {t_first_say - t0:.2f}s")
+        else:
+            print(f"[turn] TTFT {ttft:.2f}s（音声出力なし）")
 
     if monitor.triggered.is_set():
         if buffer.strip():
@@ -488,12 +540,38 @@ def _flush_sentences(buf: str, speaker: Speaker) -> str:
         buf = buf[end:]
 
 
+def _flush_first(buf: str, speaker: Speaker) -> tuple[str, bool]:
+    """応答の1文目だけ、初回の音出しを早めるために緩い基準で TTS に流す。
+      ・句点(。！？等)が来たら無条件で流す
+      ・読点(、,)なら最小文字数を超えたとき流す（短すぎる細切れを避ける）
+      ・どちらも来なくても上限文字数に達したら、そこで区切って流す
+    早出しできたら (残り, True)、まだ流せないなら (buf, False) を返す。"""
+    hard = _SENT_BOUNDARY.search(buf)
+    soft = _SOFT_BOUNDARY.search(buf)
+    if hard:
+        end = hard.end()
+    elif soft and soft.end() >= C.FIRST_FLUSH_MIN_CHARS:
+        end = soft.end()
+    elif len(buf) >= C.FIRST_FLUSH_MAX_CHARS:
+        end = C.FIRST_FLUSH_MAX_CHARS
+    else:
+        return buf, False
+    chunk = buf[:end].strip()
+    if chunk:
+        speaker.say(chunk)
+        return buf[end:], True
+    # 区切りはあったが中身が空白だけ → 区切りを捨てて継続（まだ喋っていない）
+    return buf[end:], False
+
+
 # ───────────────────────────────── 録音（VAD） ─────────────────────────────────
 def record_utterance(recorder: PvRecorder, seed=None,
-                     assume_started=False) -> np.ndarray | None:
+                     assume_started=False) -> tuple[np.ndarray | None, float | None]:
     """ウェイクワード後（またはバージイン後）の発話を、末尾無音まで録る。
     seed: 既に拾い済みの発話先頭（int16 ndarray）。バージイン継続時に前置きする。
-    assume_started: True なら発話開始済みとして扱い、開始待ちタイムアウトを無効化する。"""
+    assume_started: True なら発話開始済みとして扱い、開始待ちタイムアウトを無効化する。
+    返り値: (音声, 発話完了時刻)。発話完了時刻は無音判定の待ち時間を含まない
+    『実際に喋り終わった瞬間』の monotonic 時刻（トータル遅延の計測起点）。"""
     frame_sec = recorder.frame_length / SAMPLE_RATE
     hang_frames = int(C.SILENCE_HANG_SEC / frame_sec)
     start_timeout_frames = int(C.START_TIMEOUT_SEC / frame_sec)
@@ -507,11 +585,13 @@ def record_utterance(recorder: PvRecorder, seed=None,
     silence_run = 0
     started = assume_started or (seed is not None)
     n = 0
+    rms_vals = []   # SILENCE_RMS の調整用に分布を出す
     while True:
         pcm = recorder.read()
         arr = np.array(pcm, dtype=np.int16)
         frames.append(arr)
         rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
+        rms_vals.append(rms)
         n += 1
 
         if rms >= C.SILENCE_RMS:
@@ -522,15 +602,54 @@ def record_utterance(recorder: PvRecorder, seed=None,
 
         if not started:
             if n >= start_timeout_frames:
-                return None  # 何も喋らなかった
+                return None, None  # 何も喋らなかった
             continue
         if silence_run >= hang_frames:
-            break            # 末尾の無音 → 発話終了
+            # 末尾の無音 → 発話終了。実際に喋り終わったのは hang ぶん前
+            speech_end = time.monotonic() - silence_run * frame_sec
+            break
         if n >= max_frames:
+            speech_end = time.monotonic()
             break            # 上限
 
+    if getattr(C, "RMS_DEBUG", True) and rms_vals:
+        voiced = [v for v in rms_vals if v >= C.SILENCE_RMS]
+        silent = [v for v in rms_vals if v < C.SILENCE_RMS]
+        v_med = int(np.median(voiced)) if voiced else 0
+        v_max = int(max(voiced)) if voiced else 0
+        s_med = int(np.median(silent)) if silent else 0
+        print(f"[rms] 発話 中央値 {v_med} / 最大 {v_max}、"
+              f"無音 中央値 {s_med}（閾値 SILENCE_RMS={C.SILENCE_RMS}）")
+
     audio = np.concatenate(frames).astype(np.float32) / 32768.0
-    return audio
+    return audio, speech_end
+
+
+# ───────────────────────────────── 起動時ウォームアップ ─────────────────────────────────
+def _warmup(speaker: Speaker, messages, whisper):
+    """初回の体感遅延を吸収する。VOICEVOX(初回合成 JIT)・LLM(接続/プロンプト前処理)・
+    Whisper(CUDA カーネル初期化) を起動時に1回だけ温め、最初の発話から
+    ウォーム並みの速さで応答できるようにする。失敗は無視（本番ループの妨げにしない）。"""
+    print("ウォームアップ中…")
+    t0 = time.monotonic()
+    try:
+        speaker._synth("あ")   # 捨て合成（再生はしない）
+    except Exception as e:
+        print(f"[warmup] VOICEVOX 失敗（無視）: {e}", file=sys.stderr)
+    try:
+        # 無音1秒を transcribe して CUDA カーネルを初期化（segments は遅延評価なので回し切る）
+        segments, _ = whisper.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32),
+                                         language=C.WHISPER_LANGUAGE)
+        list(segments)
+    except Exception as e:
+        print(f"[warmup] Whisper 失敗（無視）: {e}", file=sys.stderr)
+    try:
+        # system prompt を投げてプロンプト前処理を温める。最初のトークンで即打ち切り。
+        for _ in llm_stream(messages + [{"role": "user", "content": "ping"}]):
+            break
+    except Exception as e:
+        print(f"[warmup] LLM 失敗（無視）: {e}", file=sys.stderr)
+    print(f"ウォームアップ完了（{time.monotonic() - t0:.1f}s）")
 
 
 # ───────────────────────────────── メインループ ─────────────────────────────────
@@ -554,6 +673,9 @@ def main():
     opencode = OpenCode()
     messages = [{"role": "system", "content": C.SYSTEM_PROMPT}]
 
+    if getattr(C, "WARMUP", True):
+        _warmup(speaker, messages, whisper)
+
     recorder.start()  # マイクは終始動かしっぱなし（バージイン監視のため）
     print('準備完了。「ずんだもん」と話しかけてください（Ctrl+C で終了）。')
     try:
@@ -569,14 +691,14 @@ def main():
             while True:
                 if beep_next:
                     acknowledge(speaker)
-                audio = record_utterance(recorder, seed=seed,
-                                         assume_started=(seed is not None))
+                audio, t_speech_end = record_utterance(
+                    recorder, seed=seed, assume_started=(seed is not None))
                 seed = None
                 if audio is None or len(audio) < SAMPLE_RATE * 0.3:
                     print("（聞き取れませんでした）")
                     break
 
-                t0 = time.time()
+                t0 = time.monotonic()
                 segments, _ = whisper.transcribe(
                     audio, language=C.WHISPER_LANGUAGE,
                     beam_size=getattr(C, "WHISPER_BEAM_SIZE", 1),
@@ -585,13 +707,14 @@ def main():
                 user_text = "".join(s.text for s in segments).strip()
                 if getattr(C, "STT_TIMING", True):
                     dur = len(audio) / SAMPLE_RATE
-                    print(f"[stt] {time.time() - t0:.2f}s（音声 {dur:.1f}s）")
+                    print(f"[stt] {time.monotonic() - t0:.2f}s（音声 {dur:.1f}s）")
                 if not user_text:
                     print("（無音）")
                     break
 
                 print(f"あなた: {user_text}")
                 speaker.clear_interrupt()
+                speaker.set_anchor(t_speech_end)  # 次の音出しで「発話完了→応答音声」を表示
                 monitor = BargeInMonitor(recorder, wake, speaker, C.BARGE_IN_MODE)
                 monitor.start()
                 try:

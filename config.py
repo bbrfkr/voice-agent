@@ -71,6 +71,9 @@ WHISPER_LANGUAGE    = _env("WHISPER_LANGUAGE", "ja")
 WHISPER_BEAM_SIZE   = _env("WHISPER_BEAM_SIZE", 1)      # 1=greedy（最速）
 WHISPER_VAD_FILTER  = _env("WHISPER_VAD_FILTER", False)
 STT_TIMING          = _env("STT_TIMING", True)
+TURN_TIMING         = _env("TURN_TIMING", True)        # LLM の初トークン/初音出し/初回合成の所要を表示
+RMS_DEBUG           = _env("RMS_DEBUG", True)          # 発話/無音の RMS 分布を表示（SILENCE_RMS 調整用）
+WARMUP              = _env("WARMUP", True)             # 起動時に VOICEVOX/LLM を1回温め、初回の遅延を吸収
 
 # ───────────────────────── 会話 LLM（OpenAI 互換 / llama.cpp 等） ─────────────────────────
 LLAMA_BASE_URL    = _env("LLAMA_BASE_URL", "http://127.0.0.1:8080/v1")
@@ -78,6 +81,19 @@ LLAMA_API_KEY     = _env("LLAMA_API_KEY", "")           # ★秘密。.env に�
 LLAMA_MODEL       = _env("LLAMA_MODEL", "gemma")
 LLAMA_TEMPERATURE = _env("LLAMA_TEMPERATURE", 0.7)
 LLAMA_MAX_TOKENS  = _env("LLAMA_MAX_TOKENS", 512)
+# 会話履歴の上限（system を除くメッセージ件数。20 ≒ 直近10往復）。
+# 履歴が伸び続けるとプロンプトが長くなり TTFT がじわじわ悪化するため刈り込む。0 で無制限。
+LLAMA_MAX_HISTORY = _env("LLAMA_MAX_HISTORY", 20)
+# reasoning(思考)モードを切る（Qwen3 等の thinking 対応モデル向け）。
+# thinking 中は音声に流せるテキストが出ず TTFT がまるごと延びるため、音声対話では切るのが正解。
+# chat_template_kwargs を解さないバックエンドでエラーになる場合は false にする。
+LLAMA_DISABLE_THINKING = _env("LLAMA_DISABLE_THINKING", False)
+
+# 応答の「早出し」（初回の音出しまでの無音を縮める）。
+# 応答の1文目だけ、句点を待たず読点や文字数の区切りでも先に TTS へ流す。
+# 2文目以降は従来どおり句点単位（1文目を喋る裏で生成されるので無音にならない）。
+FIRST_FLUSH_MIN_CHARS = _env("FIRST_FLUSH_MIN_CHARS", 8)   # 読点で早出しする最小文字数（細切れ防止）
+FIRST_FLUSH_MAX_CHARS = _env("FIRST_FLUSH_MAX_CHARS", 24)  # 区切りが来なくてもこの長さで区切って流す
 
 # 固定コンテキスト（人格＋作業委譲ルール）。
 # 変えたいときは .env に SYSTEM_PROMPT="..." を1行で書くか、
