@@ -5,7 +5,7 @@
 #     （cuBLAS / cuDNN9 はこのイメージが提供するので requirements の nvidia-* wheel は入れない）
 #   - マイク/スピーカーは PulseAudio(TCP) 経由でホスト(Windows)に繋ぐ前提（DOCKER.md 参照）
 #     → ALSA のデフォルト出力を pulse プラグインに向け、PvRecorder/PortAudio とも pulse に流す
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -55,9 +55,12 @@ COPY voice_agent.py /app/voice_agent.py
 COPY config.py /app/config.py
 
 # CUDA(faster-whisper) 既定。compose の environment で上書き可。
+# HF_HOME: faster-whisper(Whisper モデル) の DL 先を固定。compose がここへ bind mount して
+#          永続化する（未マウントだと毎回コンテナ破棄で消え、起動毎に再 DL になる）。
 ENV WHISPER_DEVICE=cuda \
     OWW_MODEL_PATH=/app/zundamon.onnx \
     OWW_FRAMEWORK=onnx \
-    VOICEVOX_URL=http://voicevox:50021
+    VOICEVOX_URL=http://voicevox:50021 \
+    HF_HOME=/cache/hf
 
 CMD ["python3", "voice_agent.py"]

@@ -1,9 +1,11 @@
-# voice-agent + VOICEVOX engine（GPU版）を Docker Desktop for Windows 上でまとめて起動する。
+# voice-agent + VOICEVOX engine（GPU版）を WSL2 上の docker compose でまとめて起動する。
 #
 # 前提（詳細は DOCKER.md）:
-#   - GPU      : Docker Desktop の WSL2 backend + NVIDIA ドライバ（`gpus: all` が使える）
-#   - マイク/ｽﾋﾟｰｶ: Windows ホスト側で PulseAudio を TCP(4713) で起動しておく
-#                  （Linux コンテナはホスト音声デバイスに直接アクセスできないため）
+#   - GPU      : WSL2 backend + NVIDIA ドライバ（`gpus: all` が使える）
+#   - マイク/ｽﾋﾟｰｶ: WSL2 + WSLg では WSLg の PulseAudio(unix ソケット /mnt/wslg/PulseServer)を
+#                  コンテナに bind mount して使う（下の volumes と PULSE_SERVER 参照）。
+#                  Docker Desktop + Windows 版 PulseAudio(TCP:4713) を使う場合は .env の
+#                  PULSE_SERVER を tcp:host.docker.internal:4713 にし、下の socket マウント行を外す。
 #   - config.py: ホストの config.py をそのまま bind mount（秘密情報はイメージに焼かない）
 #
 # 使い方:  docker compose up --build
@@ -38,12 +40,18 @@ services:
       - .env
     # Docker 固有の値だけはここで上書き（.env より優先）
     environment:
-      PULSE_SERVER: ${PULSE_SERVER:-tcp:host.docker.internal:4713}  # ホスト Windows の PulseAudio(TCP)
+      PULSE_SERVER: ${PULSE_SERVER:-unix:/mnt/wslg/PulseServer}     # WSLg の PulseAudio(下で同パスに mount)
       VOICEVOX_URL: http://voicevox:50021                           # 同 compose 内の TTS を参照
       OWW_MODEL_PATH: /app/zundamon.onnx                            # 下の bind mount 先
     extra_hosts:
       - "host.docker.internal:host-gateway"   # Linux 互換のため明示（Docker Desktop では自動でも可）
     volumes:
       - ./my_custom_model/zundamon.onnx:/app/zundamon.onnx:ro  # 学習済みウェイクワードモデル
+      # faster-whisper(Whisper) の DL キャッシュを永続化（HF_HOME=/cache/hf）。
+      # 初回だけ DL し、以降の起動は再利用する。ホスト側に root 所有で作られる点に注意。
+      - ./.cache/huggingface:/cache/hf
+      # WSLg の PulseAudio ソケットをコンテナへ（ホストと同じパスに置き、PULSE_SERVER と一致させる）。
+      # Docker Desktop + TCP 構成の場合はこの行を外す。
+      - /mnt/wslg/PulseServer:/mnt/wslg/PulseServer
     stdin_open: true               # ログ表示と Ctrl+C のため
     tty: true

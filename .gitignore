@@ -21,3 +21,6 @@ my_custom_model/
 
 # 手順1で各自 git clone する外部リポジトリ（学習コード入りソース版 openwakeword）
 openWakeWord/
+
+# faster-whisper(HuggingFace) の DL キャッシュ（compose が bind mount。数GB・再DL 可能）
+.cache/
