@@ -128,6 +128,15 @@ SUMMARIZE_PROMPT = _env(
     "上の作業結果を、音声で聞いて分かるように1〜2文で短く要約してください。",
 )
 
+# ───────────────────────── Discord 会話ログ ─────────────────────────
+# 会話ログ（あなたの発話 / AI の応答）を Discord Webhook へ送る。
+# 「あなた」と AI で**別の Webhook URL**にすると、Discord 側で投稿者名・アイコンが
+# 分かれて会話ログとして読みやすい（同じチャンネルに2本 Webhook を作るのが楽）。
+# 片方だけ設定した場合は両方そちらへ送り、発話者名を本文に前置して区別する。
+# 両方空ならこの機能は無効。URL は秘密情報なので .env にだけ書く。
+DISCORD_WEBHOOK_URL_USER = _env("DISCORD_WEBHOOK_URL_USER", "")   # ★秘密。.env にだけ書く
+DISCORD_WEBHOOK_URL_AI   = _env("DISCORD_WEBHOOK_URL_AI", "")     # ★秘密。.env にだけ書く
+
 # ───────────────────────── opencode serve（作業エージェント） ─────────────────────────
 OPENCODE_BASE_URL    = _env("OPENCODE_BASE_URL", "http://127.0.0.1:4096")
 OPENCODE_PROVIDER_ID = _env("OPENCODE_PROVIDER_ID", "llamacpp")

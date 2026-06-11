@@ -259,6 +259,61 @@ class Speaker:
         return r.content
 
 
+# ───────────────────────────────── 会話ログ（Discord Webhook） ─────────────────────────────────
+class DiscordLogger:
+    """会話ログを Discord Webhook へ POST する。Speaker と同様の
+    キュー + 別スレッドの投げ捨て式で、送信時間をターンのレイテンシに乗せない。
+    送信失敗は stderr に出すだけで会話は止めない。
+    「あなた」と AI で別の Webhook URL（DISCORD_WEBHOOK_URL_USER / _AI）を使うと、
+    Discord 側で投稿者（名前・アイコン）が分かれて読みやすい。片方しか設定されて
+    いなければ両方そちらへ送り、発話者名を本文に前置して区別する。両方空なら無効。"""
+
+    _LIMIT = 1900   # Discord の content 上限 2000 字への安全マージン
+
+    def __init__(self):
+        user_url = getattr(C, "DISCORD_WEBHOOK_URL_USER", "")
+        ai_url = getattr(C, "DISCORD_WEBHOOK_URL_AI", "")
+        self._urls = {"user": user_url or ai_url, "ai": ai_url or user_url}
+        self._shared = not (user_url and ai_url)   # URL 共用時は発話者名を前置
+        self.enabled = bool(user_url or ai_url)
+        self.q: "queue.Queue[tuple[str, str]]" = queue.Queue()
+        if self.enabled:
+            threading.Thread(target=self._run, daemon=True).start()
+            print("[discord] 会話ログ送信を有効化"
+                  + ("（単一 Webhook・発話者名を前置）" if self._shared else "（あなた/AI 別 Webhook）"))
+
+    def user(self, text: str):
+        self._post("user", text)
+
+    def ai(self, text: str):
+        self._post("ai", text)
+
+    def _post(self, role: str, text: str):
+        text = (text or "").strip()
+        if not self.enabled or not text:
+            return
+        if self._shared:
+            name = "あなた" if role == "user" else "ずんだもん"
+            text = f"**{name}**: {text}"
+        url = self._urls[role]
+        for i in range(0, len(text), self._LIMIT):
+            self.q.put((url, text[i:i + self._LIMIT]))
+
+    def _run(self):
+        while True:
+            url, content = self.q.get()
+            try:
+                r = requests.post(url, json={"content": content}, timeout=10)
+                if r.status_code == 429:   # レート制限: 指定秒だけ待って1回だけ再送
+                    time.sleep(float(r.headers.get("Retry-After", "1")) + 0.5)
+                    r = requests.post(url, json={"content": content}, timeout=10)
+                r.raise_for_status()
+            except Exception as e:
+                print(f"[discord] 送信失敗（無視）: {e}", file=sys.stderr)
+            finally:
+                self.q.task_done()
+
+
 def _play_beep():
     """短い確認音（TTS を待たず即フィードバック）。"""
     sr = 44100
@@ -474,7 +529,8 @@ def _trim_history(messages):
         del messages[1]
 
 
-def handle_turn(user_text, messages, speaker: Speaker, opencode: OpenCode, monitor):
+def handle_turn(user_text, messages, speaker: Speaker, opencode: OpenCode, monitor,
+                dlog: DiscordLogger):
     messages.append({"role": "user", "content": user_text})
     _trim_history(messages)
 
@@ -532,6 +588,7 @@ def handle_turn(user_text, messages, speaker: Speaker, opencode: OpenCode, monit
     if monitor.triggered.is_set():
         if buffer.strip():
             print(f"ずんだもん: {buffer.strip()}（割り込みで中断）")
+            dlog.ai(f"{buffer.strip()}（割り込みで中断）")
         messages.append({"role": "assistant", "content": buffer})
         return
 
@@ -539,12 +596,14 @@ def handle_turn(user_text, messages, speaker: Speaker, opencode: OpenCode, monit
         instruction = buffer.lstrip()[len(_TASK_SENTINEL):].strip()
         messages.append({"role": "assistant", "content": buffer})
         print(f"  → opencode へ委譲: {instruction}")
+        dlog.ai(f"🛠️ 作業委譲: {instruction}")
         speaker.say("わかりました、やってみますね")  # 待ち時間を隠すフィラー
         try:
             result = opencode.run(instruction)
         except Exception as e:
             speaker.say("作業中にエラーが出ちゃいました")
             print(f"[opencode error] {e}", file=sys.stderr)
+            dlog.ai(f"⚠️ 作業中にエラー: {e}")
             speaker.wait_done()
             return
         if monitor.triggered.is_set():   # 作業中に割り込まれたら要約しない
@@ -564,12 +623,14 @@ def handle_turn(user_text, messages, speaker: Speaker, opencode: OpenCode, monit
             speaker.say(sb)
         if summary.strip():
             print(f"ずんだもん: {summary.strip()}")
+            dlog.ai(summary)
         messages.append({"role": "assistant", "content": summary})
     else:
         if sent_buf.strip():
             speaker.say(sent_buf)   # 端数を流し切る
         if buffer.strip():
             print(f"ずんだもん: {buffer.strip()}")
+            dlog.ai(buffer)
         messages.append({"role": "assistant", "content": buffer})
 
     speaker.wait_done()
@@ -743,6 +804,7 @@ def main():
                           device_index=C.INPUT_DEVICE_INDEX)
     speaker = Speaker()
     opencode = OpenCode()
+    dlog = DiscordLogger()
     messages = [{"role": "system", "content": C.SYSTEM_PROMPT}]
 
     if getattr(C, "WARMUP", True):
@@ -793,12 +855,13 @@ def main():
                     break
 
                 print(f"あなた: {user_text}")
+                dlog.user(user_text)
                 speaker.clear_interrupt()
                 speaker.set_anchor(t_speech_end)  # 次の音出しで「発話完了→応答音声」を表示
                 monitor = BargeInMonitor(recorder, wake, speaker, C.BARGE_IN_MODE)
                 monitor.start()
                 try:
-                    handle_turn(user_text, messages, speaker, opencode, monitor)
+                    handle_turn(user_text, messages, speaker, opencode, monitor, dlog)
                 except Exception as e:
                     print(f"[turn error] {e}", file=sys.stderr)
                     speaker.say("ごめんなさい、うまく処理できませんでした")
