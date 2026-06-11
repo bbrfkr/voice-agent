@@ -137,6 +137,29 @@ SUMMARIZE_PROMPT = _env(
 DISCORD_WEBHOOK_URL_USER = _env("DISCORD_WEBHOOK_URL_USER", "")   # ★秘密。.env にだけ書く
 DISCORD_WEBHOOK_URL_AI   = _env("DISCORD_WEBHOOK_URL_AI", "")     # ★秘密。.env にだけ書く
 
+# ───────────────────────── ログモード（STT → Discord 直送） ─────────────────────────
+# 「ずんだもん」→「ログモード」で ON。以降はウェイクワード不要の連続リスニングになり、
+# 全発話を LLM・TTS を一切挟まず STT 結果のまま専用 Webhook へ POST する
+# （音声メモ・口述筆記用）。OFF は「ずんだもん」→「ログモード終了」
+# （解除もウェイクワード経由なので、メモ本文に解除フレーズが入っても誤解除しない）。
+# 送信先は会話ログとは**別の Webhook URL**（別チャンネルに作るのが楽）。
+# 未設定だとログモードは ON にできない（音声でその旨を案内する）。
+DISCORD_WEBHOOK_URL_LOGMODE = _env("DISCORD_WEBHOOK_URL_LOGMODE", "")   # ★秘密。.env にだけ書く
+# 切替の発話コマンド（カンマ区切りの同義語リスト）。照合時に空白・句読点の除去と
+# ひらがな→カタカナ統一を行うので、STT の表記ゆれ（「ログ モード」「ろぐもーど」等）は
+# 自動で吸収される。誤発火対策のため発話全体が完全一致したときだけ切り替える。
+LOG_MODE_ON_COMMANDS = _env(
+    "LOG_MODE_ON_COMMANDS",
+    "ログモード,ログモード開始,ログモードを開始,ログモードオン,ログモードスタート,"
+    "ログモードにして,ログモードして,ログモードお願い",
+)
+LOG_MODE_OFF_COMMANDS = _env(
+    "LOG_MODE_OFF_COMMANDS",
+    "ログモード終了,ログモードを終了,ログモード終了して,ログモードを終了して,"
+    "ログモードオフ,ログモード解除,ログモードを解除,ログモードを解除して,"
+    "ログモードストップ,ログモードやめて,ログモードをやめて,ログモード終わり,ログモードおしまい",
+)
+
 # ───────────────────────── opencode serve（作業エージェント） ─────────────────────────
 OPENCODE_BASE_URL    = _env("OPENCODE_BASE_URL", "http://127.0.0.1:4096")
 OPENCODE_PROVIDER_ID = _env("OPENCODE_PROVIDER_ID", "llamacpp")

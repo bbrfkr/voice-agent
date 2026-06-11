@@ -7,6 +7,12 @@
      ├ 通常会話     : 句点ごとに VOICEVOX で逐次再生（生成と再生をパイプライン）
      └ [[TASK]] 検出: opencode serve に作業委譲 → 結果を LLM が音声で要約
 
+  ログモード（「ずんだもん」→「ログモード」で ON）:
+     ウェイクワード不要の連続リスニングに切り替わり、全発話を LLM・TTS を挟まず
+     STT 結果のまま専用 Discord Webhook へ直送する（音声メモ・口述筆記用）。
+     解除は「ずんだもん」→「ログモード終了」（切替だけはモード中もウェイクワード経由。
+     メモ本文に解除フレーズが入っても誤解除しない）。
+
 設定は config.py（環境変数 / `.env` から読み込むローダ）に分離。値の編集は `.env` で行う。
 """
 
@@ -19,6 +25,7 @@ import json
 import glob
 import queue
 import threading
+import unicodedata
 from collections import deque
 
 
@@ -266,21 +273,29 @@ class DiscordLogger:
     送信失敗は stderr に出すだけで会話は止めない。
     「あなた」と AI で別の Webhook URL（DISCORD_WEBHOOK_URL_USER / _AI）を使うと、
     Discord 側で投稿者（名前・アイコン）が分かれて読みやすい。片方しか設定されて
-    いなければ両方そちらへ送り、発話者名を本文に前置して区別する。両方空なら無効。"""
+    いなければ両方そちらへ送り、発話者名を本文に前置して区別する。両方空なら無効。
+    ログモード（STT 直送）は会話ログとは別の Webhook（DISCORD_WEBHOOK_URL_LOGMODE）
+    へ送る。送信ワーカーは全 Webhook で共用する。"""
 
     _LIMIT = 1900   # Discord の content 上限 2000 字への安全マージン
 
     def __init__(self):
         user_url = getattr(C, "DISCORD_WEBHOOK_URL_USER", "")
         ai_url = getattr(C, "DISCORD_WEBHOOK_URL_AI", "")
-        self._urls = {"user": user_url or ai_url, "ai": ai_url or user_url}
+        log_url = getattr(C, "DISCORD_WEBHOOK_URL_LOGMODE", "")
+        self._urls = {"user": user_url or ai_url, "ai": ai_url or user_url,
+                      "log": log_url}
         self._shared = not (user_url and ai_url)   # URL 共用時は発話者名を前置
         self.enabled = bool(user_url or ai_url)
+        self.log_enabled = bool(log_url)
         self.q: "queue.Queue[tuple[str, str]]" = queue.Queue()
-        if self.enabled:
+        if self.enabled or self.log_enabled:
             threading.Thread(target=self._run, daemon=True).start()
+        if self.enabled:
             print("[discord] 会話ログ送信を有効化"
                   + ("（単一 Webhook・発話者名を前置）" if self._shared else "（あなた/AI 別 Webhook）"))
+        if self.log_enabled:
+            print("[discord] ログモードの送信先を有効化")
 
     def user(self, text: str):
         self._post("user", text)
@@ -288,14 +303,18 @@ class DiscordLogger:
     def ai(self, text: str):
         self._post("ai", text)
 
+    def log(self, text: str):
+        """ログモード: STT 結果をそのまま専用 Webhook へ送る（発話者名は付けない）。"""
+        self._post("log", text)
+
     def _post(self, role: str, text: str):
         text = (text or "").strip()
-        if not self.enabled or not text:
+        url = self._urls.get(role)
+        if not url or not text:
             return
-        if self._shared:
+        if role != "log" and self._shared:
             name = "あなた" if role == "user" else "ずんだもん"
             text = f"**{name}**: {text}"
-        url = self._urls[role]
         for i in range(0, len(text), self._LIMIT):
             self.q.put((url, text[i:i + self._LIMIT]))
 
@@ -312,6 +331,161 @@ class DiscordLogger:
                 print(f"[discord] 送信失敗（無視）: {e}", file=sys.stderr)
             finally:
                 self.q.task_done()
+
+
+# ───────────────────────────────── STT（faster-whisper） ─────────────────────────────────
+def _transcribe(whisper, audio) -> str:
+    """音声を文字起こしして結合テキストを返す（STT_TIMING で所要を表示）。"""
+    t0 = time.monotonic()
+    segments, _ = whisper.transcribe(
+        audio, language=C.WHISPER_LANGUAGE,
+        beam_size=getattr(C, "WHISPER_BEAM_SIZE", 1),
+        vad_filter=getattr(C, "WHISPER_VAD_FILTER", False),
+    )
+    text = "".join(s.text for s in segments).strip()
+    if getattr(C, "STT_TIMING", True):
+        dur = len(audio) / SAMPLE_RATE
+        print(f"[stt] {time.monotonic() - t0:.2f}s（音声 {dur:.1f}s）")
+    return text
+
+
+# ───────────────────────────────── ログモード（STT → Discord 直送） ─────────────────────────────────
+def _normalize_command(text: str) -> str:
+    """発話コマンド照合用の正規化。STT の表記ゆれ（「ログ モード」「ろぐもーど。」等）を
+    吸収するため、NFKC → 空白・記号の除去 → ひらがな→カタカナ統一 → 英字小文字化を行う。"""
+    text = unicodedata.normalize("NFKC", text)
+    text = re.sub(r"[^ぁ-ゖァ-ヶー一-龠a-zA-Z0-9]", "", text)
+    text = "".join(chr(ord(c) + 0x60) if "ぁ" <= c <= "ゖ" else c for c in text)
+    return text.lower()
+
+
+_LOG_ON_CMDS = {_normalize_command(s) for s in C.LOG_MODE_ON_COMMANDS.split(",") if s.strip()}
+_LOG_OFF_CMDS = {_normalize_command(s) for s in C.LOG_MODE_OFF_COMMANDS.split(",") if s.strip()}
+
+
+def _match_log_command(text: str) -> str | None:
+    """発話がログモードの切替コマンドなら "on"/"off"、違えば None を返す。
+    誤発火対策として、正規化後の発話**全体**が同義語に完全一致したときだけ反応する
+    （会話文中に「ログ」が出ただけでは切り替えない）。
+    ログモード中は全発話が Discord 直送になるため、解除側を先に判定する。"""
+    t = _normalize_command(text)
+    if t in _LOG_OFF_CMDS:
+        return "off"
+    if t in _LOG_ON_CMDS:
+        return "on"
+    return None
+
+
+def handle_log_turn(cmd: str, speaker: Speaker, dlog: DiscordLogger) -> bool:
+    """通常会話中にウェイクワード経由で受けた切替コマンドを処理し、新しいモード状態を
+    返す。TTS を使わないモードで現在状態が見えないため、必ず 1 回読み上げて
+    フィードバックする。True を返すと run_log_mode の連続リスニングへ入る。"""
+    speaker.clear_interrupt()
+    if cmd == "off":
+        speaker.say("ログモードはもともとオフです")
+        speaker.wait_done()
+        return False
+    if not dlog.log_enabled:
+        speaker.say("ログモードの送信先が設定されていないので、オンにできません")
+        speaker.wait_done()
+        print("[logmode] DISCORD_WEBHOOK_URL_LOGMODE 未設定のため ON にできません",
+              file=sys.stderr)
+        return False
+    speaker.say("ログモードがオンになりました")
+    speaker.wait_done()
+    print("[logmode] ON")
+    return True
+
+
+def record_log_utterance(recorder, wake: "WakeWord", drain: bool = False):
+    """ログモード用の録音。発話を末尾無音まで録りつつ、各フレームをウェイクワード
+    検出にも通す（BargeInMonitor と同じ並走パターン）。「ずんだもん」が発火したら
+    録音中でも即打ち切る（言いかけの音声は解除操作とみなして捨てる）。
+    連続リスニングなので開始タイムアウトは設けず、喋り出すまで待ち続ける。
+    drain=True で直前の TTS（切替フィードバック等）の自己エコーを先に捨てる。
+    返り値: (音声 or None, ウェイクワードが発火したか)。"""
+    frame_sec = FRAME_LENGTH / SAMPLE_RATE
+    hang_frames = int(C.SILENCE_HANG_SEC / frame_sec)
+    max_frames = int(C.MAX_UTTERANCE_SEC / frame_sec)
+    if drain:
+        _drain(recorder)
+    lead = deque(maxlen=max(1, int(0.4 / frame_sec)))   # 発話頭の取りこぼし防止の前置き
+    frames = []
+    silence_run = 0
+    started = False
+    while True:
+        pcm = recorder.read()
+        if wake.process(pcm):
+            return None, True
+        arr = np.array(pcm, dtype=np.int16)
+        rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
+        if not started:
+            lead.append(arr)
+            if rms >= C.SILENCE_RMS:
+                started = True
+                frames = list(lead)
+            continue
+        frames.append(arr)
+        if rms >= C.SILENCE_RMS:
+            silence_run = 0
+        else:
+            silence_run += 1
+            if silence_run >= hang_frames:
+                break
+        if len(frames) >= max_frames:
+            break
+    return np.concatenate(frames).astype(np.float32) / 32768.0, False
+
+
+def run_log_mode(recorder, wake: "WakeWord", whisper, speaker: Speaker,
+                 dlog: DiscordLogger):
+    """ログモードの連続リスニング本体。ウェイクワードなしで全発話を STT →
+    専用 Webhook へ直送し続け、「ずんだもん」→ 解除コマンドで OFF になったら返る。
+    解除をウェイクワード経由に限定することで、メモ本文に「ログモード終了」等が
+    含まれていても誤解除しない。マイクを再初期化することがあるため recorder を返す。"""
+    print('[logmode] 連続リスニング中（発話はそのまま Discord へ）。'
+          '解除は「ずんだもん」→「ログモード終了」')
+    drain = True   # 直前に ON フィードバックの TTS が鳴っている
+    while True:
+        try:
+            audio, woke = record_log_utterance(recorder, wake, drain=drain)
+        except OSError as e:
+            recorder = _recover_recorder(recorder, e)
+            drain = False
+            continue
+        drain = False
+        if woke:
+            # コマンド窓: 次の発話が解除コマンドなら OFF。それ以外は送信せず聞き続ける
+            wake.reset()
+            acknowledge(speaker)
+            try:
+                cmd_audio, _ = record_utterance(recorder)
+            except OSError as e:
+                recorder = _recover_recorder(recorder, e)
+                continue
+            cmd_text = ""
+            if cmd_audio is not None and len(cmd_audio) >= SAMPLE_RATE * 0.3:
+                cmd_text = _transcribe(whisper, cmd_audio)
+            if cmd_text:
+                print(f"あなた: {cmd_text}")
+            speaker.clear_interrupt()
+            if cmd_text and _match_log_command(cmd_text) == "off":
+                speaker.say("ログモードがオフになりました")
+                speaker.wait_done()
+                print("[logmode] OFF")
+                return recorder
+            speaker.say("ログモードのままです")
+            speaker.wait_done()
+            drain = True   # フィードバックの自己エコーを次の録音前に捨てる
+            continue
+        if audio is None or len(audio) < SAMPLE_RATE * 0.3:
+            continue
+        text = _transcribe(whisper, audio)
+        if not text:
+            continue
+        print(f"あなた: {text}")
+        dlog.log(text)
+        print("[logmode] Discord へ直送")
 
 
 def _play_beep():
@@ -811,9 +985,16 @@ def main():
         _warmup(speaker, messages, whisper)
 
     recorder.start()  # マイクは終始動かしっぱなし（バージイン監視のため）
+    log_mode = False  # ログモード。「ずんだもん」→「ログモード」で ON → 連続リスニング
     print('準備完了。「ずんだもん」と話しかけてください（Ctrl+C で終了）。')
     try:
         while True:
+            # ── ログモード: OFF に戻るまで連続リスニング（この中でブロックする） ──
+            if log_mode:
+                recorder = run_log_mode(recorder, wake, whisper, speaker, dlog)
+                log_mode = False
+                continue
+
             try:
                 pcm = recorder.read()
             except OSError as e:
@@ -840,21 +1021,19 @@ def main():
                     print("（聞き取れませんでした）")
                     break
 
-                t0 = time.monotonic()
-                segments, _ = whisper.transcribe(
-                    audio, language=C.WHISPER_LANGUAGE,
-                    beam_size=getattr(C, "WHISPER_BEAM_SIZE", 1),
-                    vad_filter=getattr(C, "WHISPER_VAD_FILTER", False),
-                )
-                user_text = "".join(s.text for s in segments).strip()
-                if getattr(C, "STT_TIMING", True):
-                    dur = len(audio) / SAMPLE_RATE
-                    print(f"[stt] {time.monotonic() - t0:.2f}s（音声 {dur:.1f}s）")
+                user_text = _transcribe(whisper, audio)
                 if not user_text:
                     print("（無音）")
                     break
 
                 print(f"あなた: {user_text}")
+
+                # ログモードへの切替コマンド（LLM・会話ログには流さない）
+                cmd = _match_log_command(user_text)
+                if cmd is not None:
+                    log_mode = handle_log_turn(cmd, speaker, dlog)
+                    break   # ターン終了 → ON なら外側の連続リスニングへ
+
                 dlog.user(user_text)
                 speaker.clear_interrupt()
                 speaker.set_anchor(t_speech_end)  # 次の音出しで「発話完了→応答音声」を表示
