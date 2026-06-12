@@ -1,0 +1,39 @@
+# 依存定義（PEP 735 dependency groups）
+#
+# このリポジトリはスクリプト構成（パッケージとして配布しない）のため [project] は持たず、
+# 実行環境ごとの依存を dependency group として宣言する。インストールは:
+#
+#     pip install --group discord      # pip >= 25.1
+#     uv pip install --group pyproject.toml:discord
+#
+# 注意: openwakeword はこの group に**入れない**。PyPI 版 (0.6.0) が依存に宣言する
+# tflite-runtime には Python 3.12 用 wheel が存在せず解決不能になるため、
+# `pip install --no-deps openwakeword` で別途入れる（OWW_FRAMEWORK=onnx では
+# tflite は実行時にも使われない。実行時に実際に使う依存は下の group に明示してある）。
+#
+# 既存のローカル版（voice_agent.py / Dockerfile）は従来どおり requirements.txt /
+# Dockerfile 内の定義を使う（このファイルは Discord 版が対象）。
+
+[dependency-groups]
+# Discord ボイスチャンネル常駐版（discord_voice_agent.py / Dockerfile.discord）
+discord = [
+    # STT。ctranslate2 は ROCm 環境では PyPI 版ではなく公式リリース添付の
+    # ROCm wheel を先に入れておく（Dockerfile.discord 参照。入っていれば上書きされない）
+    "faster-whisper>=1.0.0",
+    # Discord bot（音声送受信）
+    "discord.py[voice]>=2.4",
+    "discord-ext-voice-recv",
+    # 音声変換（48kHz ステレオ ⇔ 16kHz モノラル）
+    "soxr>=0.3",
+    "soundfile>=0.12.1",
+    # voice_agent.py の import を通すため（Discord 版では実再生/録音には使わない）
+    "sounddevice>=0.4.6",
+    "pvrecorder>=1.2.0",
+    "numpy>=1.24",
+    "requests>=2.31",
+    # ── openwakeword (--no-deps) の実行時依存 ──
+    "onnxruntime>=1.10.0,<2",
+    "tqdm>=4.0,<5.0",
+    "scipy>=1.3,<2",
+    "scikit-learn>=1,<2",
+]

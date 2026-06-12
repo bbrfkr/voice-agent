@@ -50,25 +50,23 @@ ENV LD_LIBRARY_PATH=/opt/rocm/lib
 WORKDIR /app
 
 # ── Python 依存（Ubuntu 24.04 は PEP 668 のため venv に入れる） ──
-# CTranslate2 は PyPI 版（CUDA）ではなく、リリース添付の ROCm wheel を先に入れる。
-# faster-whisper の依存解決でも『既に入っている ctranslate2』が使われ、上書きされない。
+# 依存リストは pyproject.toml の dependency group `discord`（PEP 735）で管理する。
+#   1) CTranslate2 は PyPI 版（CUDA）ではなく、リリース添付の ROCm wheel を先に入れる。
+#      group 内の faster-whisper の依存解決でも『既に入っている ctranslate2』が使われ、
+#      上書きされない。
+#   2) openwakeword は依存に tflite-runtime（Python 3.12 用 wheel が存在しない）を
+#      宣言しており、group に入れると解決不能になるため --no-deps で別途入れる。
+#      tflite は OWW_FRAMEWORK=onnx では実行時にも使われない（model.py 内の遅延
+#      import のみ）。実行時に実際に使う依存は group 側に明示してある。
 RUN python3 -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
+COPY pyproject.toml /app/pyproject.toml
 RUN wget -q "https://github.com/OpenNMT/CTranslate2/releases/download/v${CT2_VERSION}/rocm-python-wheels-Linux.zip" \
     && unzip -j rocm-python-wheels-Linux.zip "*cp312*manylinux*x86_64.whl" -d /tmp/ct2 \
     && pip install --upgrade pip \
-    && pip install \
-        /tmp/ct2/ctranslate2-*.whl \
-        "faster-whisper>=1.0.0" \
-        "openwakeword>=0.6.0" \
-        "discord.py[voice]>=2.4" \
-        "discord-ext-voice-recv" \
-        "soxr>=0.3" \
-        "soundfile>=0.12.1" \
-        "sounddevice>=0.4.6" \
-        "pvrecorder>=1.2.0" \
-        "numpy>=1.24" \
-        "requests>=2.31" \
+    && pip install /tmp/ct2/ctranslate2-*.whl \
+    && pip install --group discord \
+    && pip install --no-deps "openwakeword>=0.6.0" \
     && rm -rf rocm-python-wheels-Linux.zip /tmp/ct2
 
 # ── openWakeWord 共有特徴モデルをビルド時に取得（初回起動の DL 待ちを無くす） ──
