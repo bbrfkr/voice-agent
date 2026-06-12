@@ -107,7 +107,7 @@ docker compose -f docker-compose.discord.yml logs -f discord-voice-agent
 | VC に入ってこない | `DISCORD_VOICE_CHANNEL_ID` が**ボイス**チャンネルの ID か。bot がそのチャンネルの閲覧/接続権限を持つか。ログの `[discord] VC 接続に失敗` を確認（10 秒ごとに自動再試行） |
 | 声に反応しない | `DISCORD_ALLOWED_USER_IDS` に自分が入っているか。サーバーミュートされていないか。`OWW_THRESHOLD` / `[wake] score=` ログで感度確認。まれにユーザー特定前の音声が捨てられて頭が欠けるが、発話頭の前置きバッファで通常は吸収される |
 | 応答の声が出ない | VOICEVOX の疎通: `curl http://localhost:50021/version`。bot に Speak 権限があるか |
-| `OpusError: corrupted stream` が連発して声に反応しない | コンテナに `davey`（DAVE/E2EE）が入っていないか確認: `docker compose -f docker-compose.discord.yml exec discord-voice-agent pip list \| grep davey`。入っていると Discord がボイスを E2EE のままにし、voice-recv が復号できず全パケットがこのエラーになる。イメージは `pip uninstall davey` 済みの構成でビルドし直す（`Dockerfile.discord` のコメント参照） |
+| `OpusError: corrupted stream` が連発して声に反応しない | Discord の DAVE(E2EE) が有効なまま受信している（voice-recv が DAVE 復号未対応）。`discord_voice_agent.py` の DAVE 無効化パッチ（`max_dave_protocol_version=0`）が効いているか確認。経緯と解除条件はソースのコメントと [[システム - 音声AIエージェントの改善候補]] を参照 |
 | ウェイクワード不要にしたい | `.env` で `WAKE_MODE=always`（発話即ターン。ログモードの切替は発話コマンドのまま使える） |
 | STT が遅い | `[stt]` ログで所要を確認（典型発話で 0.3〜1 秒が目安）。精度を上げたいなら `WHISPER_MODEL=large-v3`（フル版でも実時間の約 11 倍速） |
 

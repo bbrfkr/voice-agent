@@ -20,9 +20,9 @@ discord = [
     # STT。ctranslate2 は ROCm 環境では PyPI 版ではなく公式リリース添付の
     # ROCm wheel を先に入れておく（Dockerfile.discord 参照。入っていれば上書きされない）
     "faster-whisper>=1.0.0",
-    # Discord bot（音声送受信）。[voice] extra は PyNaCl と davey を入れるが、
-    # davey（DAVE/E2EE）は voice-recv が復号未対応のため Dockerfile.discord 側で
-    # インストール後に明示的にアンインストールする（理由は Dockerfile のコメント参照）
+    # Discord bot（音声送受信）。[voice] extra は PyNaCl と davey（DAVE/E2EE）を入れる。
+    # voice-recv が DAVE 復号に未対応のため、DAVE は discord_voice_agent.py のパッチで
+    # 無効化している（詳細はそちらのコメント参照。davey は discord.py の必須チェック用に残す）
     "discord.py[voice]>=2.4",
     "discord-ext-voice-recv",
     # 音声変換（48kHz ステレオ ⇔ 16kHz モノラル）
