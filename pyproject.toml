@@ -21,10 +21,13 @@ discord = [
     # ROCm wheel を先に入れておく（Dockerfile.discord 参照。入っていれば上書きされない）
     "faster-whisper>=1.0.0",
     # Discord bot（音声送受信）。[voice] extra は PyNaCl と davey（DAVE/E2EE）を入れる。
-    # voice-recv が DAVE 復号に未対応のため、DAVE は discord_voice_agent.py のパッチで
-    # 無効化している（詳細はそちらのコメント参照。davey は discord.py の必須チェック用に残す）
     "discord.py[voice]>=2.4",
-    "discord-ext-voice-recv",
+    # voice-recv は PyPI 版が DAVE(E2EE) 復号に未対応で、2026-03 の Discord による
+    # DAVE 必須化以降は受信が全パケット OpusError になる（非対応の申告は接続拒否 4017 になる
+    # ため回避も不可）。upstream の対応 PR #54 を取り込んだ fork を commit 固定で使う。
+    # upstream がマージ・リリースしたら PyPI 版（"discord-ext-voice-recv"）に戻すこと。
+    # 判断の記録: wiki [[システム - 音声AIエージェントの改善候補]] 候補 9 の実装メモ
+    "discord-ext-voice-recv @ https://github.com/rdphillips7/discord-ext-voice-recv/archive/ddd28601fe556f585b869e215f29c8236b95f88f.tar.gz",
     # 音声変換（48kHz ステレオ ⇔ 16kHz モノラル）
     "soxr>=0.3",
     "soundfile>=0.12.1",

@@ -38,18 +38,10 @@ from discord.ext import voice_recv
 import config as C
 import voice_agent as va
 
-# ── DAVE(E2EE) を無効化するパッチ ──
-# Discord は 2026-03 からボイスの E2EE（DAVE プロトコル）を展開しており、discord.py 2.7+
-# は davey により DAVE 対応を advertise する。しかし discord-ext-voice-recv の受信経路は
-# DAVE 復号に未対応のため、E2EE のままの音声が opus デコーダへ渡り、全受信パケットが
-# OpusError: corrupted stream になる（voice-recv issue #53 / PR #54）。
-# 対応バージョンを 0 として申告すると、Discord は DAVE 非対応参加者向けの正規の経路として
-# チャンネルを従来のトランスポート暗号化へダウングレードするため、受信が成立する。
-# voice-recv が DAVE 復号に正式対応したら、このパッチを外して voice-recv を更新すること。
-# （davey 自体は discord.py 2.7+ が VoiceClient 生成時に必須チェックするため、外せない）
-from discord import voice_state as _voice_state
-
-_voice_state.VoiceConnectionState.max_dave_protocol_version = property(lambda self: 0)
+# 注意: Discord は 2026-03 からボイスの E2EE（DAVE プロトコル）を必須化しており、
+# 非対応クライアントは接続自体が拒否される（WebSocket close 4017）。受信側の DAVE 復号は
+# PyPI 版 discord-ext-voice-recv では未対応のため、対応 PR を取り込んだ fork を commit 固定で
+# 使っている（pyproject.toml の dependency group と wiki の判断記録を参照）。
 from voice_agent import (
     SAMPLE_RATE, FRAME_LENGTH,
     WakeWord, Speaker, DiscordLogger, OpenCode, BargeInMonitor,
