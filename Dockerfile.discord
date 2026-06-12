@@ -67,6 +67,13 @@ RUN wget -q "https://github.com/OpenNMT/CTranslate2/releases/download/v${CT2_VER
     && pip install /tmp/ct2/ctranslate2-*.whl \
     && pip install --group discord \
     && pip install --no-deps "openwakeword>=0.6.0" \
+    # davey（DAVE/E2EE 実装。discord.py[voice] 経由で入る）は意図的に外す。
+    # 入っていると bot が DAVE 対応を advertise して Discord がボイスの E2EE を維持するが、
+    # discord-ext-voice-recv の受信経路は DAVE 復号に未対応のため、全受信パケットが
+    # OpusError: corrupted stream になる（upstream issue #53 / PR #54）。davey が無ければ
+    # discord.py は DAVE 非対応として接続し、Discord 側がチャンネルを従来のトランスポート
+    # 暗号化へダウングレードするので受信が成立する。voice-recv が DAVE 対応したら戻すこと。
+    && pip uninstall -y davey \
     && rm -rf rocm-python-wheels-Linux.zip /tmp/ct2
 
 # ── openWakeWord 共有特徴モデルをビルド時に取得（初回起動の DL 待ちを無くす） ──
