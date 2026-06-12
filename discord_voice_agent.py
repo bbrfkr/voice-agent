@@ -49,7 +49,7 @@ from voice_agent import (
     SAMPLE_RATE, FRAME_LENGTH,
     WakeWord, Speaker, DiscordLogger, OpenCode, BargeInMonitor,
     handle_turn, handle_log_turn, run_log_mode, record_utterance, acknowledge,
-    _transcribe, _match_log_command, _warmup,
+    _match_log_command, _warmup,
 )
 
 DISCORD_SR = 48000      # Discord の音声は 48kHz / 16bit / ステレオ固定
@@ -222,6 +222,21 @@ def _dump_utterance(audio: np.ndarray, text: str):
         print(f"[dump] 保存失敗（無視）: {e}", file=sys.stderr)
 
 
+def _install_dump_hook():
+    """UTTERANCE_DUMP_DIR 設定時、STT を通る全発話（通常会話・ログモード・コマンド窓
+    すべて）を保存するよう voice_agent._transcribe をラップする。収集はログモード中の
+    発話も対象（ログモードは LLM/TTS の応答を挟まないため、連続録音に都合がよい）。"""
+    orig = va._transcribe
+
+    def transcribe_and_dump(whisper, audio):
+        text = orig(whisper, audio)
+        _dump_utterance(audio, text)
+        return text
+
+    va._transcribe = transcribe_and_dump
+    print(f"[dump] 発話音声を {C.UTTERANCE_DUMP_DIR} へ保存します（学習データ採取モード）")
+
+
 # ───────────────────────────────── エージェント本体（別スレッド・同期） ─────────────────────────────────
 def agent_main(recorder: DiscordRecorder, get_vc):
     """voice_agent.main() のメインループ相当。音声 I/O を仮想レコーダー/スピーカーに
@@ -247,6 +262,8 @@ def agent_main(recorder: DiscordRecorder, get_vc):
     #                       投げないので呼ばれない。万一に備えそのまま返すだけにする。
     va._play_beep = _make_discord_beep(get_vc)
     va._recover_recorder = lambda rec, err: rec
+    if C.UTTERANCE_DUMP_DIR:
+        _install_dump_hook()
 
     opencode = OpenCode()
     dlog = DiscordLogger()
@@ -296,9 +313,8 @@ def agent_main(recorder: DiscordRecorder, get_vc):
                 print("（聞き取れませんでした）")
                 break
 
-            user_text = _transcribe(whisper, audio)
-            if C.UTTERANCE_DUMP_DIR:
-                _dump_utterance(audio, user_text)
+            # va._transcribe 経由で呼ぶ（UTTERANCE_DUMP_DIR 設定時の dump フックを通すため）
+            user_text = va._transcribe(whisper, audio)
             if not user_text:
                 print("（無音）")
                 break
