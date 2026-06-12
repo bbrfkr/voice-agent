@@ -173,17 +173,28 @@ class DiscordSpeaker(Speaker):
             time.sleep(0.05)
         if self._interrupted:
             return
-        source = discord.PCMAudio(io.BytesIO(_to_discord_pcm(data, sr)))
+        pcm = _to_discord_pcm(data, sr)
+        source = discord.PCMAudio(io.BytesIO(pcm))
         done = threading.Event()
         try:
             vc.play(source, after=lambda _e: done.set())
         except discord.ClientException as e:
             print(f"[discord] 再生開始に失敗（無視）: {e}", file=sys.stderr)
             return
-        # 約50msごとに割り込みフラグを確認（バージインで vc.stop() → after が発火して抜ける）
+        # 約50msごとに割り込みフラグを確認（バージインで vc.stop() → after が発火して抜ける）。
+        # 注意: VC が切断されると discord.py の再生スレッドは再接続待ちで無期限ブロックし、
+        # after が永遠に呼ばれないことがある（パイプライン全体が凍る）。再生実時間+5秒の
+        # デッドラインと「再接続で VoiceClient が替わった」検出で必ず抜ける。
+        deadline = time.monotonic() + len(pcm) / (DISCORD_SR * 4) + 5.0
         while not done.wait(0.05):
-            if self._interrupted:
-                vc.stop()
+            if self._interrupted or time.monotonic() > deadline or self._get_vc() is not vc:
+                try:
+                    vc.stop()
+                except Exception:
+                    pass
+                if not self._interrupted:
+                    print("[discord] 再生が完了しないため打ち切り（VC 切断/再接続の可能性）",
+                          file=sys.stderr)
                 return
 
 
@@ -271,6 +282,26 @@ def agent_main(recorder: DiscordRecorder, get_vc):
 
     if getattr(C, "WARMUP", True):
         _warmup(speaker, messages, whisper)
+
+    # ── 収集専用モード: 会話せず、全発話を録音 → STT → 保存だけする ──
+    # ウェイクワード判定を一切通さないので、検出可否に関係なく全サンプルが集まる。
+    # ログモードと違い「ずんだもん」で解除コマンド窓に入ることもない。
+    if getattr(C, "COLLECT_ONLY", False) and C.UTTERANCE_DUMP_DIR:
+        print("[collect] 収集専用モード（応答なし・全発話を保存）。終了は COLLECT_ONLY を"
+              "外してコンテナ再起動")
+        count = 0
+        while True:
+            pcm = recorder.read()
+            arr = np.asarray(pcm, dtype=np.int16)
+            rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
+            if rms < C.SILENCE_RMS:
+                continue
+            audio, _ = record_utterance(recorder, seed=arr, assume_started=True)
+            if audio is None or len(audio) < SAMPLE_RATE * 0.3:
+                continue
+            text = va._transcribe(whisper, audio)   # dump フック経由で保存される
+            count += 1
+            print(f"[collect] {count} 件目（{len(audio)/SAMPLE_RATE:.1f}s）: {text}")
 
     wake_always = C.WAKE_MODE.strip().lower() == "always"
     log_mode = False

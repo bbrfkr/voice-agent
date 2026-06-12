@@ -172,9 +172,12 @@ DISCORD_ALLOWED_USER_IDS = _env("DISCORD_ALLOWED_USER_IDS", "")
 WAKE_MODE                = _env("WAKE_MODE", "wakeword")
 # 発話音声の収集（デバッグ/学習データ採取用）。ディレクトリを指定すると、認識した発話の
 # 16kHz モノラル wav を STT 結果つきファイル名で保存する。空なら無効。
-# ウェイクワードモデルの追加学習用に実環境（Discord 経由）の正例を集めるときに
-# WAKE_MODE=always と組み合わせて使う（詳細は train_local/README.md）。
 UTTERANCE_DUMP_DIR       = _env("UTTERANCE_DUMP_DIR", "")
+# 収集専用モード。true にすると会話を一切せず（ウェイクワード判定・LLM・TTS なし）、
+# 発話の録音 → STT → UTTERANCE_DUMP_DIR への保存だけを行う。ウェイクワードモデルの
+# 追加学習用に実環境（Discord 経由）の正例をまとめて録るときに使う。
+# UTTERANCE_DUMP_DIR とセットで指定すること。
+COLLECT_ONLY             = _env("COLLECT_ONLY", False)
 
 # ───────────────────────── opencode serve（作業エージェント） ─────────────────────────
 OPENCODE_BASE_URL    = _env("OPENCODE_BASE_URL", "http://127.0.0.1:4096")
