@@ -1,0 +1,28 @@
+# commit 時に lint・フォーマット・型チェックを自動実行する（回し忘れ防止）。
+# 初回のみ: make dev-install（または python3 -m pre_commit install）
+#
+# 設定・対象は pyproject.toml に集約。dev グループで入れた ruff/mypy を system で使う
+# （pre-commit に重い実行依存を再解決させない）。
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: python3 -m ruff check --fix
+        language: system
+        types: [python]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: python3 -m ruff format
+        language: system
+        types: [python]
+        require_serial: true
+      - id: mypy
+        name: mypy
+        entry: python3 -m mypy
+        language: system
+        # 対象ファイルは pyproject.toml の [tool.mypy] files が決めるので渡さない
+        pass_filenames: false
+        types: [python]
+        require_serial: true

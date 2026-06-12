@@ -16,15 +16,16 @@
 設定は config.py（環境変数 / `.env` から読み込むローダ）に分離。値の編集は `.env` で行う。
 """
 
+import contextlib
+import glob
 import io
+import json
 import os
+import queue
 import re
 import sys
-import time
-import json
-import glob
-import queue
 import threading
+import time
 import unicodedata
 from collections import deque
 
@@ -41,6 +42,7 @@ def _register_cuda_dll_dirs():
     if sys.platform != "win32":
         return
     import site
+
     bases = list(site.getsitepackages())
     user = getattr(site, "getusersitepackages", lambda: None)()
     if user:
@@ -53,39 +55,40 @@ def _register_cuda_dll_dirs():
             if binp in seen or not os.path.isdir(binp):
                 continue
             seen.add(binp)
-            try:
+            with contextlib.suppress(OSError):
                 os.add_dll_directory(binp)
-            except OSError:
-                pass
             os.environ["PATH"] = binp + os.pathsep + os.environ.get("PATH", "")
             found.append(binp)
     has_cublas = any(glob.glob(os.path.join(d, "cublas64_*.dll")) for d in found)
     if found and has_cublas:
         print(f"CUDA DLL ディレクトリを登録: {len(found)} 件")
     elif found:
-        print(f"⚠ nvidia の bin を {len(found)} 件登録しましたが cublas64_*.dll が見当たりません。"
-              "nvidia-cublas-cu12 を入れ直してください。")
+        print(
+            f"⚠ nvidia の bin を {len(found)} 件登録しましたが cublas64_*.dll が見当たりません。"
+            "nvidia-cublas-cu12 を入れ直してください。"
+        )
     else:
-        print("⚠ nvidia-* の DLL が見つかりません。CUDA を使うには:\n"
-              "    pip install nvidia-cublas-cu12 nvidia-cudnn-cu12")
+        print(
+            "⚠ nvidia-* の DLL が見つかりません。CUDA を使うには:\n    pip install nvidia-cublas-cu12 nvidia-cudnn-cu12"
+        )
 
 
 # faster_whisper(CTranslate2) を import する前に DLL 検索パスを通す
 _register_cuda_dll_dirs()
 
 import numpy as np
+import openwakeword
 import requests
 import sounddevice as sd
 import soundfile as sf
-import openwakeword
+from faster_whisper import WhisperModel
 from openwakeword.model import Model as OWWModel
 from pvrecorder import PvRecorder
-from faster_whisper import WhisperModel
 
 import config as C
 
-SAMPLE_RATE = 16000   # whisper / openWakeWord とも 16kHz 固定
-FRAME_LENGTH = 1280   # 80ms。openWakeWord の推奨フレーム長
+SAMPLE_RATE = 16000  # whisper / openWakeWord とも 16kHz 固定
+FRAME_LENGTH = 1280  # 80ms。openWakeWord の推奨フレーム長
 
 # 文の区切り（ここで TTS に流す単位を切る）
 _SENT_BOUNDARY = re.compile(r"[。．！？!?\n]")
@@ -101,12 +104,9 @@ class WakeWord:
 
     def __init__(self):
         # 共有の特徴抽出モデル（melspectrogram / embedding / silero VAD）を必要なら取得
-        try:
+        with contextlib.suppress(Exception):
             openwakeword.utils.download_models(model_names=[])
-        except Exception:
-            pass
-        kwargs = dict(wakeword_models=[C.OWW_MODEL_PATH],
-                      inference_framework=C.OWW_FRAMEWORK)
+        kwargs = dict(wakeword_models=[C.OWW_MODEL_PATH], inference_framework=C.OWW_FRAMEWORK)
         # 誤発火対策①: openWakeWord 内蔵の Silero VAD で「人の声」以外をゲートする
         self.vad_threshold = getattr(C, "OWW_VAD_THRESHOLD", 0.0)
         if self.vad_threshold > 0:
@@ -121,7 +121,7 @@ class WakeWord:
         self.threshold = C.OWW_THRESHOLD
         # 誤発火対策②: 直近約1秒の入力 RMS がこの値未満なら発火を無視（0 で無効）
         self.min_rms = getattr(C, "WAKE_MIN_RMS", 0)
-        self._rms_hist = deque(maxlen=12)   # 80ms × 12 ≒ 直近1秒
+        self._rms_hist: deque[float] = deque(maxlen=12)  # 80ms × 12 ≒ 直近1秒
         # OWW_DEBUG=True で、声に対する検出スコアを表示（閾値調整・感度確認用）。
         # 既定 True（診断中）。安定したら config.py に OWW_DEBUG=False を足す。
         self.debug = getattr(C, "OWW_DEBUG", True)
@@ -158,10 +158,10 @@ class Speaker:
     interrupt() でバージイン（再生の即時停止＋未再生キュー破棄）に対応。"""
 
     def __init__(self):
-        self.q: "queue.Queue[str|None]" = queue.Queue()
+        self.q: queue.Queue[str | None] = queue.Queue()
         self._interrupted = False
-        self._anchor = None   # ユーザー発話完了時刻。次に音が鳴る直前に総遅延を表示する
-        self._stream = None   # 再生専用 OutputStream（再生スレッドだけが触る）
+        self._anchor = None  # ユーザー発話完了時刻。次に音が鳴る直前に総遅延を表示する
+        self._stream = None  # 再生専用 OutputStream（再生スレッドだけが触る）
         self.worker = threading.Thread(target=self._run, daemon=True)
         self.worker.start()
 
@@ -229,17 +229,16 @@ class Speaker:
         if st is None or st.samplerate != sr or st.channels != channels:
             if st is not None:
                 st.close()
-            st = self._stream = sd.OutputStream(samplerate=sr, channels=channels,
-                                                dtype="float32")
+            st = self._stream = sd.OutputStream(samplerate=sr, channels=channels, dtype="float32")
         if st.stopped:
             st.start()
-        step = max(256, int(sr * 0.05))   # 約50msごとにフラグを見る
+        step = max(256, int(sr * 0.05))  # 約50msごとにフラグを見る
         for i in range(0, len(data), step):
             if self._interrupted:
-                st.abort()   # バッファに残った音も捨てて即黙る（同一スレッドなので安全）
+                st.abort()  # バッファに残った音も捨てて即黙る（同一スレッドなので安全）
                 return
-            st.write(np.ascontiguousarray(data[i:i + step]))
-        st.stop()   # 書いた分を鳴らし切ってから停止（アイドル中の underrun 防止）
+            st.write(np.ascontiguousarray(data[i : i + step]))
+        st.stop()  # 書いた分を鳴らし切ってから停止（アイドル中の underrun 防止）
 
     def _synth(self, text: str):
         # 1) audio_query 2) synthesis の2段（VOICEVOX 標準）
@@ -277,23 +276,24 @@ class DiscordLogger:
     ログモード（STT 直送）は会話ログとは別の Webhook（DISCORD_WEBHOOK_URL_LOGMODE）
     へ送る。送信ワーカーは全 Webhook で共用する。"""
 
-    _LIMIT = 1900   # Discord の content 上限 2000 字への安全マージン
+    _LIMIT = 1900  # Discord の content 上限 2000 字への安全マージン
 
     def __init__(self):
         user_url = getattr(C, "DISCORD_WEBHOOK_URL_USER", "")
         ai_url = getattr(C, "DISCORD_WEBHOOK_URL_AI", "")
         log_url = getattr(C, "DISCORD_WEBHOOK_URL_LOGMODE", "")
-        self._urls = {"user": user_url or ai_url, "ai": ai_url or user_url,
-                      "log": log_url}
-        self._shared = not (user_url and ai_url)   # URL 共用時は発話者名を前置
+        self._urls = {"user": user_url or ai_url, "ai": ai_url or user_url, "log": log_url}
+        self._shared = not (user_url and ai_url)  # URL 共用時は発話者名を前置
         self.enabled = bool(user_url or ai_url)
         self.log_enabled = bool(log_url)
-        self.q: "queue.Queue[tuple[str, str]]" = queue.Queue()
+        self.q: queue.Queue[tuple[str, str]] = queue.Queue()
         if self.enabled or self.log_enabled:
             threading.Thread(target=self._run, daemon=True).start()
         if self.enabled:
-            print("[discord] 会話ログ送信を有効化"
-                  + ("（単一 Webhook・発話者名を前置）" if self._shared else "（あなた/AI 別 Webhook）"))
+            print(
+                "[discord] 会話ログ送信を有効化"
+                + ("（単一 Webhook・発話者名を前置）" if self._shared else "（あなた/AI 別 Webhook）")
+            )
         if self.log_enabled:
             print("[discord] ログモードの送信先を有効化")
 
@@ -316,14 +316,14 @@ class DiscordLogger:
             name = "あなた" if role == "user" else "ずんだもん"
             text = f"**{name}**: {text}"
         for i in range(0, len(text), self._LIMIT):
-            self.q.put((url, text[i:i + self._LIMIT]))
+            self.q.put((url, text[i : i + self._LIMIT]))
 
     def _run(self):
         while True:
             url, content = self.q.get()
             try:
                 r = requests.post(url, json={"content": content}, timeout=10)
-                if r.status_code == 429:   # レート制限: 指定秒だけ待って1回だけ再送
+                if r.status_code == 429:  # レート制限: 指定秒だけ待って1回だけ再送
                     time.sleep(float(r.headers.get("Retry-After", "1")) + 0.5)
                     r = requests.post(url, json={"content": content}, timeout=10)
                 r.raise_for_status()
@@ -338,7 +338,8 @@ def _transcribe(whisper, audio) -> str:
     """音声を文字起こしして結合テキストを返す（STT_TIMING で所要を表示）。"""
     t0 = time.monotonic()
     segments, _ = whisper.transcribe(
-        audio, language=C.WHISPER_LANGUAGE,
+        audio,
+        language=C.WHISPER_LANGUAGE,
         beam_size=getattr(C, "WHISPER_BEAM_SIZE", 1),
         vad_filter=getattr(C, "WHISPER_VAD_FILTER", False),
     )
@@ -388,8 +389,7 @@ def handle_log_turn(cmd: str, speaker: Speaker, dlog: DiscordLogger) -> bool:
     if not dlog.log_enabled:
         speaker.say("ログモードの送信先が設定されていないので、オンにできません")
         speaker.wait_done()
-        print("[logmode] DISCORD_WEBHOOK_URL_LOGMODE 未設定のため ON にできません",
-              file=sys.stderr)
+        print("[logmode] DISCORD_WEBHOOK_URL_LOGMODE 未設定のため ON にできません", file=sys.stderr)
         return False
     speaker.say("ログモードがオンになりました")
     speaker.wait_done()
@@ -409,7 +409,7 @@ def record_log_utterance(recorder, wake: "WakeWord", drain: bool = False):
     max_frames = int(C.MAX_UTTERANCE_SEC / frame_sec)
     if drain:
         _drain(recorder)
-    lead = deque(maxlen=max(1, int(0.4 / frame_sec)))   # 発話頭の取りこぼし防止の前置き
+    lead: deque[list[int]] = deque(maxlen=max(1, int(0.4 / frame_sec)))  # 発話頭の取りこぼし防止の前置き
     frames = []
     silence_run = 0
     started = False
@@ -437,15 +437,13 @@ def record_log_utterance(recorder, wake: "WakeWord", drain: bool = False):
     return np.concatenate(frames).astype(np.float32) / 32768.0, False
 
 
-def run_log_mode(recorder, wake: "WakeWord", whisper, speaker: Speaker,
-                 dlog: DiscordLogger):
+def run_log_mode(recorder, wake: "WakeWord", whisper, speaker: Speaker, dlog: DiscordLogger):
     """ログモードの連続リスニング本体。ウェイクワードなしで全発話を STT →
     専用 Webhook へ直送し続け、「ずんだもん」→ 解除コマンドで OFF になったら返る。
     解除をウェイクワード経由に限定することで、メモ本文に「ログモード終了」等が
     含まれていても誤解除しない。マイクを再初期化することがあるため recorder を返す。"""
-    print('[logmode] 連続リスニング中（発話はそのまま Discord へ）。'
-          '解除は「ずんだもん」→「ログモード終了」')
-    drain = True   # 直前に ON フィードバックの TTS が鳴っている
+    print("[logmode] 連続リスニング中（発話はそのまま Discord へ）。解除は「ずんだもん」→「ログモード終了」")
+    drain = True  # 直前に ON フィードバックの TTS が鳴っている
     while True:
         try:
             audio, woke = record_log_utterance(recorder, wake, drain=drain)
@@ -476,7 +474,7 @@ def run_log_mode(recorder, wake: "WakeWord", whisper, speaker: Speaker,
                 return recorder
             speaker.say("ログモードのままです")
             speaker.wait_done()
-            drain = True   # フィードバックの自己エコーを次の録音前に捨てる
+            drain = True  # フィードバックの自己エコーを次の録音前に捨てる
             continue
         if audio is None or len(audio) < SAMPLE_RATE * 0.3:
             continue
@@ -509,9 +507,9 @@ def acknowledge(speaker):
     if mode in ("voice", "both"):
         text = getattr(C, "ACK_VOICE_TEXT", "はい")
         if text:
-            speaker.clear_interrupt()   # 直前の割り込み状態で ack が抑制されないように
+            speaker.clear_interrupt()  # 直前の割り込み状態で ack が抑制されないように
             speaker.say(text)
-            speaker.wait_done()         # 返事を鳴らし切ってから録音へ（直後にバッファを drain）
+            speaker.wait_done()  # 返事を鳴らし切ってから録音へ（直後にバッファを drain）
 
 
 def _drain(recorder):
@@ -554,6 +552,7 @@ class BargeInMonitor(threading.Thread):
         except Exception as e:
             # スレッド内の例外は通常表に出ない。バージインが効かない原因を可視化する。
             import traceback
+
             print(f"[barge-in] 監視スレッドが例外終了: {e}", file=sys.stderr)
             traceback.print_exc()
 
@@ -574,7 +573,7 @@ class BargeInMonitor(threading.Thread):
         while not self._stop_event.is_set():
             pcm = self.recorder.read()
             frames_read += 1
-            if debug and frames_read % 25 == 0:   # 約2秒ごとに生存確認
+            if debug and frames_read % 25 == 0:  # 約2秒ごとに生存確認
                 print(f"[barge-in] 監視中… {frames_read} フレーム読込（mode={self.mode}）")
             if self.mode == "wakeword":
                 if self.wake.process(pcm):
@@ -631,7 +630,7 @@ def llm_stream(messages):
         for line in r.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data:"):
                 continue
-            data = line[len("data:"):].strip()
+            data = line[len("data:") :].strip()
             if data == "[DONE]":
                 break
             try:
@@ -698,28 +697,27 @@ def _trim_history(messages):
     keep = getattr(C, "LLAMA_MAX_HISTORY", 20)
     if keep <= 0 or len(messages) - 1 <= keep:
         return
-    del messages[1:len(messages) - keep]
+    del messages[1 : len(messages) - keep]
     while len(messages) > 1 and messages[1]["role"] != "user":
         del messages[1]
 
 
-def handle_turn(user_text, messages, speaker: Speaker, opencode: OpenCode, monitor,
-                dlog: DiscordLogger):
+def handle_turn(user_text, messages, speaker: Speaker, opencode: OpenCode, monitor, dlog: DiscordLogger):
     messages.append({"role": "user", "content": user_text})
     _trim_history(messages)
 
-    buffer = ""          # 生成テキスト全体
-    sent_buf = ""        # TTS にまだ流していない端数
-    decided = False      # 雑談/タスクの判定が済んだか
+    buffer = ""  # 生成テキスト全体
+    sent_buf = ""  # TTS にまだ流していない端数
+    decided = False  # 雑談/タスクの判定が済んだか
     is_task = False
-    first_done = False   # 1文目を喋り出したか（早出し制御）
+    first_done = False  # 1文目を喋り出したか（早出し制御）
 
-    t0 = time.monotonic()             # LLM 呼び出し開始（STT 完了直後）
-    t_first_token = None         # 最初のトークンが来た時刻
-    t_first_say = None           # 最初の音をキューに積んだ時刻
+    t0 = time.monotonic()  # LLM 呼び出し開始（STT 完了直後）
+    t_first_token = None  # 最初のトークンが来た時刻
+    t_first_say = None  # 最初の音をキューに積んだ時刻
 
     for delta in llm_stream(messages):
-        if monitor.triggered.is_set():   # バージインで中断
+        if monitor.triggered.is_set():  # バージインで中断
             break
         if t_first_token is None:
             t_first_token = time.monotonic()
@@ -767,7 +765,7 @@ def handle_turn(user_text, messages, speaker: Speaker, opencode: OpenCode, monit
         return
 
     if is_task:
-        instruction = buffer.lstrip()[len(_TASK_SENTINEL):].strip()
+        instruction = buffer.lstrip()[len(_TASK_SENTINEL) :].strip()
         messages.append({"role": "assistant", "content": buffer})
         print(f"  → opencode へ委譲: {instruction}")
         dlog.ai(f"🛠️ 作業委譲: {instruction}")
@@ -780,11 +778,10 @@ def handle_turn(user_text, messages, speaker: Speaker, opencode: OpenCode, monit
             dlog.ai(f"⚠️ 作業中にエラー: {e}")
             speaker.wait_done()
             return
-        if monitor.triggered.is_set():   # 作業中に割り込まれたら要約しない
+        if monitor.triggered.is_set():  # 作業中に割り込まれたら要約しない
             return
         # 結果を LLM に渡して音声向けに要約させる
-        messages.append({"role": "user",
-                         "content": f"作業結果:\n{result}\n\n{C.SUMMARIZE_PROMPT}"})
+        messages.append({"role": "user", "content": f"作業結果:\n{result}\n\n{C.SUMMARIZE_PROMPT}"})
         summary = ""
         sb = ""
         for delta in llm_stream(messages):
@@ -801,7 +798,7 @@ def handle_turn(user_text, messages, speaker: Speaker, opencode: OpenCode, monit
         messages.append({"role": "assistant", "content": summary})
     else:
         if sent_buf.strip():
-            speaker.say(sent_buf)   # 端数を流し切る
+            speaker.say(sent_buf)  # 端数を流し切る
         if buffer.strip():
             print(f"ずんだもん: {buffer.strip()}")
             dlog.ai(buffer)
@@ -848,8 +845,7 @@ def _flush_first(buf: str, speaker: Speaker) -> tuple[str, bool]:
 
 
 # ───────────────────────────────── 録音（VAD） ─────────────────────────────────
-def record_utterance(recorder: PvRecorder, seed=None,
-                     assume_started=False) -> tuple[np.ndarray | None, float | None]:
+def record_utterance(recorder: PvRecorder, seed=None, assume_started=False) -> tuple[np.ndarray | None, float | None]:
     """ウェイクワード後（またはバージイン後）の発話を、末尾無音まで録る。
     seed: 既に拾い済みの発話先頭（int16 ndarray）。バージイン継続時に前置きする。
     assume_started: True なら発話開始済みとして扱い、開始待ちタイムアウトを無効化する。
@@ -864,11 +860,11 @@ def record_utterance(recorder: PvRecorder, seed=None,
     if seed is not None and len(seed) > 0:
         frames.append(np.asarray(seed, dtype=np.int16))
     else:
-        _drain(recorder)   # ack の自己エコー/バックログを捨て、今から録る
+        _drain(recorder)  # ack の自己エコー/バックログを捨て、今から録る
     silence_run = 0
     started = assume_started or (seed is not None)
     n = 0
-    rms_vals = []   # SILENCE_RMS の調整用に分布を出す
+    rms_vals = []  # SILENCE_RMS の調整用に分布を出す
     while True:
         pcm = recorder.read()
         arr = np.array(pcm, dtype=np.int16)
@@ -893,7 +889,7 @@ def record_utterance(recorder: PvRecorder, seed=None,
             break
         if n >= max_frames:
             speech_end = time.monotonic()
-            break            # 上限
+            break  # 上限
 
     if getattr(C, "RMS_DEBUG", True) and rms_vals:
         voiced = [v for v in rms_vals if v >= C.SILENCE_RMS]
@@ -901,8 +897,7 @@ def record_utterance(recorder: PvRecorder, seed=None,
         v_med = int(np.median(voiced)) if voiced else 0
         v_max = int(max(voiced)) if voiced else 0
         s_med = int(np.median(silent)) if silent else 0
-        print(f"[rms] 発話 中央値 {v_med} / 最大 {v_max}、"
-              f"無音 中央値 {s_med}（閾値 SILENCE_RMS={C.SILENCE_RMS}）")
+        print(f"[rms] 発話 中央値 {v_med} / 最大 {v_max}、無音 中央値 {s_med}（閾値 SILENCE_RMS={C.SILENCE_RMS}）")
 
     audio = np.concatenate(frames).astype(np.float32) / 32768.0
     return audio, speech_end
@@ -916,13 +911,12 @@ def _warmup(speaker: Speaker, messages, whisper):
     print("ウォームアップ中…")
     t0 = time.monotonic()
     try:
-        speaker._synth("あ")   # 捨て合成（再生はしない）
+        speaker._synth("あ")  # 捨て合成（再生はしない）
     except Exception as e:
         print(f"[warmup] VOICEVOX 失敗（無視）: {e}", file=sys.stderr)
     try:
         # 無音1秒を transcribe して CUDA カーネルを初期化（segments は遅延評価なので回し切る）
-        segments, _ = whisper.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32),
-                                         language=C.WHISPER_LANGUAGE)
+        segments, _ = whisper.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), language=C.WHISPER_LANGUAGE)
         list(segments)
     except Exception as e:
         print(f"[warmup] Whisper 失敗（無視）: {e}", file=sys.stderr)
@@ -941,16 +935,13 @@ def _recover_recorder(recorder, err):
     出力側の不調などで瞬断することがあり、その際 PvRecorder.read() が
     OSError を投げて戻らなくなるため、プロセスごと落とさず繋ぎ直す。"""
     print(f"[audio] マイク読み取りに失敗、再初期化します: {err}", file=sys.stderr)
-    try:
+    with contextlib.suppress(Exception):
         recorder.delete()
-    except Exception:
-        pass
     last = None
     for _ in range(5):
         time.sleep(1.0)
         try:
-            r = PvRecorder(frame_length=FRAME_LENGTH,
-                           device_index=C.INPUT_DEVICE_INDEX)
+            r = PvRecorder(frame_length=FRAME_LENGTH, device_index=C.INPUT_DEVICE_INDEX)
             r.start()
             print("[audio] マイクを再初期化しました")
             return r
@@ -965,17 +956,17 @@ def main():
     wake = WakeWord()
     # CUDA DLL は import 前に _register_cuda_dll_dirs() 済み（モジュール冒頭）
     try:
-        whisper = WhisperModel(C.WHISPER_MODEL, device=C.WHISPER_DEVICE,
-                               compute_type=C.WHISPER_COMPUTE)
+        whisper = WhisperModel(C.WHISPER_MODEL, device=C.WHISPER_DEVICE, compute_type=C.WHISPER_COMPUTE)
     except Exception as e:
         if C.WHISPER_DEVICE != "cpu":
-            print(f"[警告] CUDA で Whisper を初期化できませんでした（{e}）。CPU にフォールバックします。\n"
-                  "      GPU を使うには: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12")
+            print(
+                f"[警告] CUDA で Whisper を初期化できませんでした（{e}）。CPU にフォールバックします。\n"
+                "      GPU を使うには: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12"
+            )
             whisper = WhisperModel(C.WHISPER_MODEL, device="cpu", compute_type="int8")
         else:
             raise
-    recorder = PvRecorder(frame_length=FRAME_LENGTH,
-                          device_index=C.INPUT_DEVICE_INDEX)
+    recorder = PvRecorder(frame_length=FRAME_LENGTH, device_index=C.INPUT_DEVICE_INDEX)
     speaker = Speaker()
     opencode = OpenCode()
     dlog = DiscordLogger()
@@ -986,7 +977,7 @@ def main():
 
     recorder.start()  # マイクは終始動かしっぱなし（バージイン監視のため）
     log_mode = False  # ログモード。「ずんだもん」→「ログモード」で ON → 連続リスニング
-    print('準備完了。「ずんだもん」と話しかけてください（Ctrl+C で終了）。')
+    print("準備完了。「ずんだもん」と話しかけてください（Ctrl+C で終了）。")
     try:
         while True:
             # ── ログモード: OFF に戻るまで連続リスニング（この中でブロックする） ──
@@ -1005,17 +996,16 @@ def main():
             wake.reset()  # 検出直後にバッファを消して連続誤発火を防ぐ
 
             # ── ウェイクワード検出 → ターン連鎖（バージインで継続） ──
-            seed = None          # 直前のバージインで拾った発話先頭
-            beep_next = True     # この発話の前にビープを鳴らすか
+            seed = None  # 直前のバージインで拾った発話先頭
+            beep_next = True  # この発話の前にビープを鳴らすか
             while True:
                 if beep_next:
                     acknowledge(speaker)
                 try:
-                    audio, t_speech_end = record_utterance(
-                        recorder, seed=seed, assume_started=(seed is not None))
+                    audio, t_speech_end = record_utterance(recorder, seed=seed, assume_started=(seed is not None))
                 except OSError as e:
                     recorder = _recover_recorder(recorder, e)
-                    break   # このターンは諦めてウェイクワード待ちへ
+                    break  # このターンは諦めてウェイクワード待ちへ
                 seed = None
                 if audio is None or len(audio) < SAMPLE_RATE * 0.3:
                     print("（聞き取れませんでした）")
@@ -1032,7 +1022,7 @@ def main():
                 cmd = _match_log_command(user_text)
                 if cmd is not None:
                     log_mode = handle_log_turn(cmd, speaker, dlog)
-                    break   # ターン終了 → ON なら外側の連続リスニングへ
+                    break  # ターン終了 → ON なら外側の連続リスニングへ
 
                 dlog.user(user_text)
                 speaker.clear_interrupt()
@@ -1050,16 +1040,16 @@ def main():
                     monitor.join()  # マイクを次に読む前に監視スレッドを止める
 
                 r = monitor.result
-                if isinstance(r, np.ndarray):       # energy 割り込み: 続きを録る
+                if isinstance(r, np.ndarray):  # energy 割り込み: 続きを録る
                     print("（割り込みを検出）")
                     seed = r
                     beep_next = False
                     continue
-                if r == "wake":                     # 「ずんだもん」で割り込み: 録り直し
+                if r == "wake":  # 「ずんだもん」で割り込み: 録り直し
                     print("（「ずんだもん」で割り込み）")
                     beep_next = True
                     continue
-                break                               # 通常終了 → ウェイクワード待ちへ
+                break  # 通常終了 → ウェイクワード待ちへ
     except KeyboardInterrupt:
         print("\n終了します。")
     finally:

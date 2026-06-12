@@ -208,17 +208,32 @@ python train_local/train.py --training_config train_local/config.yaml \
 
 ```bash
 cp .env.example .env          # 設定は .env に集約（config.py は触らない）
-pip install -r requirements.txt
+pip install --group runtime --group cuda   # 依存は pyproject.toml に集約（pip>=25.1）
 export PULSE_SERVER=tcp:<WindowsホストのIP>:4713
 python voice_agent.py
 ```
-- GPU で faster-whisper を使うには `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`（requirements.txt 同梱）が要る。
+- GPU で faster-whisper を使うには `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`（pyproject の `cuda` グループ同梱）が要る。
   入っていないと自動で CPU にフォールバック（large-v3 は遅くなる）。
 
 > **（参考）Windows ネイティブ実行**：Python を Windows に直接入れて動かすことも一応可能だが、
 > faster-whisper(CTranslate2) が `cublas64_12.dll` を見つけられず落ちる既知の罠がある
 > （`voice_agent.py` の `_register_cuda_dll_dirs()` が pip の `nvidia-*` wheel の bin を登録して回避）。
 > 音声デバイスも素直に使えるので一見楽だが、本リポジトリは **WSL/Docker を前提**に整備している。
+
+## 開発（型 + lint の担保）
+
+「型とlintは無料の担保」として ruff（lint/format）と mypy（型チェック）を入れている。
+設定・依存は `pyproject.toml` に集約。**コード変更後は必ず `make check` を回す**こと。
+
+```bash
+make dev-install   # 開発ツール導入 + pre-commit 有効化（pip>=25.1。重い実行依存は入らない）
+make check         # ruff lint + mypy（commit 前の本命）
+make format        # ruff フォーマット
+```
+
+- 型チェック対象は本体（`voice_agent.py` / `config.py`）。`train_local/` は対象外。
+- commit 時は `.pre-commit-config.yaml` のフックでも同じチェックが自動で回る。
+- `pip<25.1`（`--group` 非対応）なら `pip install ruff mypy pre-commit` で代替可。
 
 ## 既知の制約 / 今後
 

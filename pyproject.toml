@@ -1,0 +1,77 @@
+# voice-agent のツール設定・依存定義の一元管理。
+#
+# 実行依存も dev 依存も PEP 735 の [dependency-groups] に集約する（pip>=25.1 が必要）。
+# パッケージ化はしないので [project] テーブルは置かない（フラットなスクリプト構成のまま）。
+#
+#   開発(macOS):  pip install --group dev      # 重い実行依存を巻き込まず ruff/mypy/pre-commit だけ
+#   Windows実機:  pip install --group runtime --group cuda
+#   Docker:       pip install --group runtime  # cuBLAS/cuDNN は土台イメージが提供するので cuda は入れない
+#
+# pip<25.1（--group 非対応）の場合のフォールバックは README / Makefile を参照。
+
+[dependency-groups]
+# ── 実行時のコア依存（プラットフォーム非依存） ──
+runtime = [
+    "faster-whisper>=1.0.0",
+    "openwakeword>=0.6.0",   # ウェイクワード検出（OSS, onnxruntime 同梱）
+    "pvrecorder>=1.2.0",     # マイク録音のみ（Apache-2.0, キー不要）
+    "sounddevice>=0.4.6",
+    "soundfile>=0.12.1",
+    "numpy>=1.24",
+    "requests>=2.31",
+]
+# ── Windows で faster-whisper を CUDA 実行するための cuBLAS/cuDNN 同梱 wheel ──
+# Docker は cuDNN 付き CUDA ランタイムイメージが提供するため入れない。
+cuda = [
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12",
+]
+# ── 開発ツールのみ（runtime を include しない＝macOS で軽量に入る） ──
+dev = [
+    "ruff",
+    "mypy",
+    "pre-commit",
+]
+
+# ───────────────────────── ruff（lint + formatter） ─────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 120          # 長い日本語コメントの実態に合わせ、不要な折り返し差分を抑える
+extend-exclude = ["train_local"]   # 学習スクリプト群は今回スコープ外
+# pre-commit はファイルを明示的に渡すため、これが無いと除外が無視される（train_local も検査されてしまう）。
+force-exclude = true
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# voice_agent.py は faster_whisper(CTranslate2) を import する前に CUDA DLL 検索パスを
+# 通す必要があり、_register_cuda_dll_dirs() 呼び出し後に import を置く設計（意図的）。
+"voice_agent.py" = ["E402"]
+
+# ───────────────────────── mypy（型チェック・段階的strict） ─────────────────────────
+[tool.mypy]
+python_version = "3.12"
+files = ["voice_agent.py", "config.py"]   # 本体のみ。train_local は対象外
+# 中程度strict のベースライン（まず green を作る。disallow_untyped_defs 等は次フェーズで ratchet）
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+check_untyped_defs = true
+
+# 未インストール / 型情報のない外部ライブラリの import 解決失敗を無視する
+# （macOS 開発環境には重い実行依存を入れないため）。自前コード側の整合性だけを検査する。
+[[tool.mypy.overrides]]
+module = [
+    "faster_whisper",
+    "openwakeword",
+    "openwakeword.*",
+    "pvrecorder",
+    "sounddevice",
+    "soundfile",
+    "numpy",
+    "requests",
+]
+ignore_missing_imports = true
