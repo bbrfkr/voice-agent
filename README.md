@@ -15,6 +15,11 @@
             └ [[TASK]] 検出: opencode serve に委譲 → 結果をLLMが音声で要約
 ```
 
+> **Discord ボイスチャンネル常駐版もある**: ローカルのマイク/スピーカーの代わりに
+> Discord の VC へ bot として常駐させる構成（`discord_voice_agent.py`）。スマホからも使え、
+> STT は Radeon（ROCm / amdgpu）で動かせる。既存のローカル版とは独立した別 compose
+> （`docker-compose.discord.yml`）で起動する。手順は **[`DISCORD.md`](DISCORD.md)** を参照。
+
 ## 構成と配置
 
 | 役割 | 何を | どこで |

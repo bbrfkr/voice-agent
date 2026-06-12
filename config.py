@@ -160,6 +160,17 @@ LOG_MODE_OFF_COMMANDS = _env(
     "ログモードストップ,ログモードやめて,ログモードをやめて,ログモード終わり,ログモードおしまい",
 )
 
+# ───────────────────────── Discord ボイスチャンネル常駐 bot（discord_voice_agent.py） ─────────────────────────
+# ローカルマイク/スピーカーの代わりに Discord のボイスチャンネルへ bot として常駐する版
+# （docker-compose.discord.yml で起動）の設定。voice_agent.py（ローカル版）では使わない。
+DISCORD_BOT_TOKEN        = _env("DISCORD_BOT_TOKEN", "")          # ★秘密。.env にだけ書く
+DISCORD_VOICE_CHANNEL_ID = _env("DISCORD_VOICE_CHANNEL_ID", 0)    # 常駐するボイスチャンネルの ID
+# 反応するユーザーの限定（カンマ区切りのユーザー ID）。空なら bot 以外の全員に反応。
+DISCORD_ALLOWED_USER_IDS = _env("DISCORD_ALLOWED_USER_IDS", "")
+# ウェイクワードの扱い: "wakeword"=「ずんだもん」呼びかけ式（既定） / "always"=常時リッスン
+# （発話すべてにウェイクワードなしで応答。1人で使うチャンネル向け）
+WAKE_MODE                = _env("WAKE_MODE", "wakeword")
+
 # ───────────────────────── opencode serve（作業エージェント） ─────────────────────────
 OPENCODE_BASE_URL    = _env("OPENCODE_BASE_URL", "http://127.0.0.1:4096")
 OPENCODE_PROVIDER_ID = _env("OPENCODE_PROVIDER_ID", "llamacpp")

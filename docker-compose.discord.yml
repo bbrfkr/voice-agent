@@ -1,0 +1,54 @@
+# Discord ボイスチャンネル常駐版（discord_voice_agent.py）+ VOICEVOX engine（CPU版）を
+# docker compose でまとめて起動する。既存のローカル版（docker-compose.yml）とは独立した
+# 別環境（プロジェクト名 voice-agent-discord）。想定ホストは ROCm 入りのネイティブ Linux
+# （Ryzen AI Max+ 395 / Radeon 8060S 等）。導入手順・前提は DISCORD.md を参照。
+#
+# 前提:
+#   - GPU      : ホストに amdgpu ドライバ + ROCm（7.2.x 系）。コンテナへは /dev/kfd と
+#                /dev/dri を渡す。render グループの GID はホスト依存なので .env の
+#                RENDER_GID で渡す（getent group render | cut -d: -f3）。
+#   - 音声 I/O : Discord 経由なので PulseAudio もマイク/スピーカーも不要。
+#   - LLM/opencode: LAN の既存サーバを外部参照（.env の LLAMA_BASE_URL / OPENCODE_BASE_URL）。
+#
+# 使い方:  docker compose -f docker-compose.discord.yml up --build -d
+
+name: voice-agent-discord
+
+services:
+  # ── TTS: VOICEVOX engine（CPU 版。STT が Radeon を使うので TTS は CPU に逃がす） ──
+  voicevox:
+    image: voicevox/voicevox_engine:cpu-latest
+    restart: unless-stopped
+    ports:
+      - "50021:50021"              # ホストからの疎通確認用（/speakers 等）。不要なら消してよい
+
+  # ── 音声エージェント本体（Discord VC 常駐 bot） ──
+  discord-voice-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.discord
+    image: voice-agent-discord:latest
+    restart: unless-stopped       # 常駐前提。Discord 切断やエラーで落ちても上げ直す
+    depends_on:
+      - voicevox
+    # Radeon(ROCm) をコンテナから使うための定番セット
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - "${RENDER_GID:-render}"   # render の GID はホスト依存。.env の RENDER_GID で指定
+    security_opt:
+      - seccomp:unconfined
+    # 設定値は .env から注入する（唯一の編集面。config.py は触らない）
+    env_file:
+      - .env
+    # Docker 固有の値だけはここで上書き（.env より優先）
+    environment:
+      VOICEVOX_URL: http://voicevox:50021    # 同 compose 内の TTS を参照
+      OWW_MODEL_PATH: /app/zundamon.onnx     # 下の bind mount 先
+    volumes:
+      - ./my_custom_model/zundamon.onnx:/app/zundamon.onnx:ro  # 学習済みウェイクワードモデル
+      # faster-whisper(Whisper) の DL キャッシュを永続化（HF_HOME=/cache/hf）。
+      # 初回だけ DL し、以降の起動は再利用する。ホスト側に root 所有で作られる点に注意。
+      - ./.cache/huggingface:/cache/hf
