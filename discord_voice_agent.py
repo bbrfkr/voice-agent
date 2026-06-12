@@ -25,12 +25,15 @@ bot として常駐する。スマホ等、Discord app が動く端末ならど�
 
 import asyncio
 import io
+import os
 import queue
+import re
 import sys
 import threading
 import time
 
 import numpy as np
+import soundfile as sf
 import soxr
 import discord
 from discord.ext import voice_recv
@@ -203,6 +206,22 @@ def _make_discord_beep(get_vc):
     return beep
 
 
+# ───────────────────────────────── 発話音声の収集（学習データ採取用） ─────────────────────────────────
+def _dump_utterance(audio: np.ndarray, text: str):
+    """認識した発話を 16kHz モノラル wav として UTTERANCE_DUMP_DIR へ保存する。
+    ウェイクワードモデルの追加学習用に、実環境（Discord 経由）の音声を集めるための
+    デバッグ機能。ファイル名に STT 結果を含め、正例/負例の仕分けをしやすくする。
+    失敗しても会話は止めない。"""
+    try:
+        os.makedirs(C.UTTERANCE_DUMP_DIR, exist_ok=True)
+        label = re.sub(r"[^ぁ-ゖァ-ヶー一-龠a-zA-Z0-9]", "", text)[:24] or "unrecognized"
+        name = f"{time.strftime('%Y%m%d_%H%M%S')}_{int(time.time() * 1000) % 1000:03d}_{label}.wav"
+        sf.write(os.path.join(C.UTTERANCE_DUMP_DIR, name), audio, SAMPLE_RATE,
+                 subtype="PCM_16")
+    except Exception as e:
+        print(f"[dump] 保存失敗（無視）: {e}", file=sys.stderr)
+
+
 # ───────────────────────────────── エージェント本体（別スレッド・同期） ─────────────────────────────────
 def agent_main(recorder: DiscordRecorder, get_vc):
     """voice_agent.main() のメインループ相当。音声 I/O を仮想レコーダー/スピーカーに
@@ -278,6 +297,8 @@ def agent_main(recorder: DiscordRecorder, get_vc):
                 break
 
             user_text = _transcribe(whisper, audio)
+            if C.UTTERANCE_DUMP_DIR:
+                _dump_utterance(audio, user_text)
             if not user_text:
                 print("（無音）")
                 break

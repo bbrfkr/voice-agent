@@ -170,6 +170,11 @@ DISCORD_ALLOWED_USER_IDS = _env("DISCORD_ALLOWED_USER_IDS", "")
 # ウェイクワードの扱い: "wakeword"=「ずんだもん」呼びかけ式（既定） / "always"=常時リッスン
 # （発話すべてにウェイクワードなしで応答。1人で使うチャンネル向け）
 WAKE_MODE                = _env("WAKE_MODE", "wakeword")
+# 発話音声の収集（デバッグ/学習データ採取用）。ディレクトリを指定すると、認識した発話の
+# 16kHz モノラル wav を STT 結果つきファイル名で保存する。空なら無効。
+# ウェイクワードモデルの追加学習用に実環境（Discord 経由）の正例を集めるときに
+# WAKE_MODE=always と組み合わせて使う（詳細は train_local/README.md）。
+UTTERANCE_DUMP_DIR       = _env("UTTERANCE_DUMP_DIR", "")
 
 # ───────────────────────── opencode serve（作業エージェント） ─────────────────────────
 OPENCODE_BASE_URL    = _env("OPENCODE_BASE_URL", "http://127.0.0.1:4096")

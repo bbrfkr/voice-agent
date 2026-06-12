@@ -52,3 +52,6 @@ services:
       # faster-whisper(Whisper) の DL キャッシュを永続化（HF_HOME=/cache/hf）。
       # 初回だけ DL し、以降の起動は再利用する。ホスト側に root 所有で作られる点に注意。
       - ./.cache/huggingface:/cache/hf
+      # 発話音声の収集先（UTTERANCE_DUMP_DIR=/cache/utterances を設定したときに使う。
+      # ウェイクワードモデルの追加学習用データ採取。未設定なら何も書かれない）
+      - ./.cache/utterances:/cache/utterances
