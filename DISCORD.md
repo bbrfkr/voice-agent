@@ -45,7 +45,18 @@ opencode 委譲・Discord 会話ログ・ログモード・バージイン。
 - docker / docker compose v2.20 以降（compose ファイル先頭の `name:` を解するもの）
 - 会話 LLM（llama.cpp）と作業エージェント（opencode）は **LAN の既存サーバを外部参照**
   （`.env` の `LLAMA_BASE_URL` / `OPENCODE_BASE_URL`）
-- 学習済みウェイクワードモデル `my_custom_model/zundamon.onnx`（リポジトリ同梱）
+- 学習済みウェイクワードモデル `my_custom_model/zundamon.onnx`。**Discord 構成では
+  `zundamon_discord.onnx`（リポジトリ同梱）を `zundamon.onnx` にコピーして使う**こと:
+  ```bash
+  cp my_custom_model/zundamon_discord.onnx my_custom_model/zundamon.onnx
+  ```
+  ローカルマイク収録のみで学習した `zundamon_local.onnx` は Discord 経由の音声
+  （Opus 圧縮 + クライアントのノイズ抑制等）をほぼ検出できない（実測 5%）。
+  `zundamon_discord.onnx` は実際に Discord 経由で収録した発話を学習データの 3 割に
+  混ぜた版で、同条件で検出率 100%（閾値 0.45・誤発火 0%）。逆にローカル版
+  （`docker-compose.yml`）では従来どおり `zundamon_local.onnx` を使う。
+  再学習・データ採取の手順は `train_local/README.md` と `.env.example` の
+  `UTTERANCE_DUMP_DIR` / `COLLECT_ONLY` を参照
 
 > STT は CTranslate2 公式の **ROCm wheel**（gfx1151 カーネル焼き込み済み）を使うため、
 > ソースビルドや `HSA_OVERRIDE_GFX_VERSION` は不要。コードも `WHISPER_DEVICE=cuda` の

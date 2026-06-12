@@ -16,8 +16,13 @@ __pycache__/
 data/
 # VOICEVOX で生成した正例サンプル
 wake_samples/
-# 学習中間物 + 学習済み zundamon.onnx
-my_custom_model/
+# 学習中間物は除外しつつ、学習成果のモデル（小さい）はコミットして保持する。
+# zundamon.onnx は「現在使う方のコピー」（compose のマウント先）なので除外のまま。
+#   zundamon_local.onnx   = ローカルマイク（PulseAudio/Windows 収録）環境向け
+#   zundamon_discord.onnx = Discord ボイスチャンネル環境向け（実 Discord 収録データ入り）
+my_custom_model/*
+!my_custom_model/zundamon_local.onnx
+!my_custom_model/zundamon_discord.onnx
 
 # 手順1で各自 git clone する外部リポジトリ（学習コード入りソース版 openwakeword）
 openWakeWord/
