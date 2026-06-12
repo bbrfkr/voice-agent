@@ -34,16 +34,11 @@ RUN printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' > /etc/a
 
 WORKDIR /app
 
-# ── Python 依存（nvidia-* wheel は土台イメージが提供するので除外） ──
-RUN python3 -m pip install --upgrade pip \
-    && python3 -m pip install \
-        "faster-whisper>=1.0.0" \
-        "openwakeword>=0.6.0" \
-        "pvrecorder>=1.2.0" \
-        "sounddevice>=0.4.6" \
-        "soundfile>=0.12.1" \
-        "numpy>=1.24" \
-        "requests>=2.31"
+# ── Python 依存（pyproject.toml の runtime グループ。cuBLAS/cuDNN は土台イメージが提供するので cuda は入れない） ──
+# pip>=25.1 が PEP 735 の --group に対応。
+COPY pyproject.toml /app/pyproject.toml
+RUN python3 -m pip install --upgrade "pip>=25.1" \
+    && python3 -m pip install --group runtime
 
 # ── openWakeWord 共有特徴モデルをビルド時に取得（初回起動の DL 待ちを無くす） ──
 RUN python3 -c "import openwakeword.utils as u; u.download_models()"
