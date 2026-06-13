@@ -192,3 +192,13 @@ ACK_BEEP = _env("ACK_BEEP", True)
 BARGE_IN_MODE = _env("BARGE_IN_MODE", "wakeword")  # "wakeword"/"energy"/"off"
 BARGE_IN_RMS = _env("BARGE_IN_RMS", 1200)
 BARGE_IN_MIN_SEC = _env("BARGE_IN_MIN_SEC", 0.25)
+
+# ───────────────────────── 会話継続モード（フォローアップ窓） ─────────────────────────
+# 応答を喋り終えた直後、ウェイクワード（「ずんだもん」）を言わずにそのまま続けて話せる
+# 「窓」を開く。毎回呼び直す手間を省くのが狙い。窓は無音で開く（合図音は鳴らさない）。
+# 窓が無言のまま FOLLOWUP_WINDOW_SEC 経過したら閉じ、ウェイクワード待ちへ戻る。
+# 閉じる瞬間だけ FOLLOWUP_CLOSE_TEXT を 1 回読み上げて「また呼んでね」と知らせる。
+FOLLOWUP_ENABLED = _env("FOLLOWUP_ENABLED", True)  # False で従来どおり毎ターン要ウェイクワード
+FOLLOWUP_WINDOW_SEC = _env("FOLLOWUP_WINDOW_SEC", 6.0)  # 窓の開始待ち（無言でこの秒数経つと閉じる）
+# 窓を閉じてウェイクワード待ちへ戻るときの読み上げ。空文字にすると合図なし（無音で閉じる）。
+FOLLOWUP_CLOSE_TEXT = _env("FOLLOWUP_CLOSE_TEXT", "また呼んでください")

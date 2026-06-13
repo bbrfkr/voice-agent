@@ -7,6 +7,11 @@
      ├ 通常会話     : 句点ごとに VOICEVOX で逐次再生（生成と再生をパイプライン）
      └ [[TASK]] 検出: opencode serve に作業委譲 → 結果を LLM が音声で要約
 
+  会話継続モード（フォローアップ窓）:
+     応答後しばらくはウェイクワード無しでそのまま話し続けられる（窓は無音で開く）。
+     無言のまま閉じるときだけ「また呼んでください」と読み上げてウェイクワード待ちへ戻る。
+     FOLLOWUP_ENABLED / FOLLOWUP_WINDOW_SEC / FOLLOWUP_CLOSE_TEXT で調整・無効化できる。
+
   ログモード（「ずんだもん」→「ログモード」で ON）:
      ウェイクワード不要の連続リスニングに切り替わり、全発話を LLM・TTS を挟まず
      STT 結果のまま専用 Discord Webhook へ直送する（音声メモ・口述筆記用）。
@@ -512,6 +517,18 @@ def acknowledge(speaker):
             speaker.wait_done()  # 返事を鳴らし切ってから録音へ（直後にバッファを drain）
 
 
+def _close_followup(speaker: Speaker) -> None:
+    """会話継続モードの窓が無言で閉じ、ウェイクワード待ちへ戻ることを知らせる。
+    FOLLOWUP_CLOSE_TEXT を 1 回読み上げる（空文字なら無音で閉じる＝合図なし）。
+    窓を開くときは無音だが、閉じる（呼び直しが要る状態に戻る）ときだけ知らせる。"""
+    text = getattr(C, "FOLLOWUP_CLOSE_TEXT", "")
+    print("[followup] 窓を閉じてウェイクワード待ちへ")
+    if text:
+        speaker.clear_interrupt()
+        speaker.say(text)
+        speaker.wait_done()
+
+
 def _drain(recorder):
     """PvRecorder のバッファに溜まった古い音声（ack の自己エコー等）を捨て、
     『今』から録音できるようにする。バックログは即返り、追いつくと read() が
@@ -845,15 +862,20 @@ def _flush_first(buf: str, speaker: Speaker) -> tuple[str, bool]:
 
 
 # ───────────────────────────────── 録音（VAD） ─────────────────────────────────
-def record_utterance(recorder: PvRecorder, seed=None, assume_started=False) -> tuple[np.ndarray | None, float | None]:
+def record_utterance(
+    recorder: PvRecorder, seed=None, assume_started=False, start_timeout: float | None = None
+) -> tuple[np.ndarray | None, float | None]:
     """ウェイクワード後（またはバージイン後）の発話を、末尾無音まで録る。
     seed: 既に拾い済みの発話先頭（int16 ndarray）。バージイン継続時に前置きする。
     assume_started: True なら発話開始済みとして扱い、開始待ちタイムアウトを無効化する。
+    start_timeout: 喋り出すまでの待ち秒数の上書き（None で C.START_TIMEOUT_SEC）。
+        会話継続モードの窓では C.FOLLOWUP_WINDOW_SEC を渡し、長めに待ち受ける。
     返り値: (音声, 発話完了時刻)。発話完了時刻は無音判定の待ち時間を含まない
     『実際に喋り終わった瞬間』の monotonic 時刻（トータル遅延の計測起点）。"""
     frame_sec = recorder.frame_length / SAMPLE_RATE
     hang_frames = int(C.SILENCE_HANG_SEC / frame_sec)
-    start_timeout_frames = int(C.START_TIMEOUT_SEC / frame_sec)
+    start_sec = C.START_TIMEOUT_SEC if start_timeout is None else start_timeout
+    start_timeout_frames = int(start_sec / frame_sec)
     max_frames = int(C.MAX_UTTERANCE_SEC / frame_sec)
 
     frames = []
@@ -995,24 +1017,36 @@ def main():
                 continue
             wake.reset()  # 検出直後にバッファを消して連続誤発火を防ぐ
 
-            # ── ウェイクワード検出 → ターン連鎖（バージインで継続） ──
+            # ── ウェイクワード検出 → ターン連鎖（バージイン／会話継続で継続） ──
             seed = None  # 直前のバージインで拾った発話先頭
-            beep_next = True  # この発話の前にビープを鳴らすか
+            beep_next = True  # この発話の前に合図（ack）を鳴らすか
+            followup = False  # この発話が会話継続モードの窓（ウェイクワード不要）か
             while True:
                 if beep_next:
                     acknowledge(speaker)
                 try:
-                    audio, t_speech_end = record_utterance(recorder, seed=seed, assume_started=(seed is not None))
+                    if followup:
+                        # 会話継続モード: 応答後しばらくウェイクワード無しで聞く。
+                        # 喋り出さなければ窓を閉じてウェイクワード待ちへ戻る。
+                        audio, t_speech_end = record_utterance(recorder, start_timeout=C.FOLLOWUP_WINDOW_SEC)
+                    else:
+                        audio, t_speech_end = record_utterance(recorder, seed=seed, assume_started=(seed is not None))
                 except OSError as e:
                     recorder = _recover_recorder(recorder, e)
                     break  # このターンは諦めてウェイクワード待ちへ
                 seed = None
                 if audio is None or len(audio) < SAMPLE_RATE * 0.3:
+                    if followup:
+                        _close_followup(speaker)  # 窓が無言で閉じた
+                        break
                     print("（聞き取れませんでした）")
                     break
 
                 user_text = _transcribe(whisper, audio)
                 if not user_text:
+                    if followup:
+                        _close_followup(speaker)
+                        break
                     print("（無音）")
                     break
 
@@ -1044,12 +1078,20 @@ def main():
                     print("（割り込みを検出）")
                     seed = r
                     beep_next = False
+                    followup = False
                     continue
                 if r == "wake":  # 「ずんだもん」で割り込み: 録り直し
                     print("（「ずんだもん」で割り込み）")
                     beep_next = True
+                    followup = False
                     continue
-                break  # 通常終了 → ウェイクワード待ちへ
+                # 通常終了 → 会話継続モードなら窓を開く（ウェイクワード無しで次の発話を聞く）。
+                # 窓は無音で開き、ack も鳴らさない。無言で閉じるときだけ _close_followup で知らせる。
+                if C.FOLLOWUP_ENABLED:
+                    followup = True
+                    beep_next = False
+                    continue
+                break  # 会話継続モード無効 → ウェイクワード待ちへ
     except KeyboardInterrupt:
         print("\n終了します。")
     finally:
