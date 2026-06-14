@@ -32,6 +32,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: voice-agent:latest
+    restart: unless-stopped        # WSL/Docker 再起動後も自動で復帰させる
     gpus: all                      # faster-whisper(CUDA) 用
     depends_on:
       - voicevox
