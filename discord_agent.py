@@ -331,15 +331,11 @@ async def _run() -> None:
         except Exception as e:
             print(f"[discord] libopus のロードに失敗（音声送受信に必要）: {e}", file=sys.stderr)
 
-    intents = discord.Intents.default()
+    # 必要最小限のインテント。発話確定は無音ハング（flush_idle）で行うため、
+    # 特権インテント（members）は不要。guilds は VC/チャンネル解決に必要。
+    intents = discord.Intents.none()
+    intents.guilds = True
     intents.voice_states = True
-    # voice-recv は発話者を SSRC→メンバーで解決する。発話停止イベント
-    # (on_voice_member_speaking_stop) はギルドのメンバーキャッシュ
-    # (guild.get_member) で解決できたときだけ発火し、解決できないと握り潰される。
-    # キャッシュを埋めるには特権インテント「SERVER MEMBERS INTENT」が必須
-    # （Developer Portal 側でも有効化が必要。無効のまま要求すると起動時に
-    # PrivilegedIntentsRequired で落ちる）。これが無いと発話が一切確定せず無応答になる。
-    intents.members = True
     client = discord.Client(intents=intents)
     loop = asyncio.get_running_loop()
     agent = Agent(loop)
@@ -357,14 +353,6 @@ async def _run() -> None:
                 file=sys.stderr,
             )
             return
-        # 話者をギルドのメンバーキャッシュに載せておく（display_name 解決や、
-        # ライブラリ側のメンバー依存処理の保険）。members インテントが有効なら
-        # 起動時チャンクで埋まるが、念のため明示的に取り込む。失敗は無視。
-        if not channel.guild.chunked:
-            try:
-                await channel.guild.chunk()
-            except Exception as e:
-                print(f"[discord] メンバーチャンク取得に失敗（無視）: {e}", file=sys.stderr)
         vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
         agent.attach_voice(vc)
         sink = SegmentSink(agent)

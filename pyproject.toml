@@ -14,9 +14,15 @@
 # STT(faster-whisper) と TTS(VOICEVOX) は GPU サーバ側の HTTP サービスに分離したため、
 # bot 側にはモデルや CUDA を持たない。音声 I/O は Discord ボイスチャンネルで行う。
 runtime = [
-    "discord.py>=2.4",               # Discord bot 本体（voice 送信。pynacl で音声対応）
-    "discord-ext-voice-recv>=0.5",   # ボイス受信拡張（AudioSink で話者ごとに PCM を受け取る）
-    "PyNaCl>=1.5",                   # voice の暗号化（discord.py の voice に必須）
+    # Discord bot 本体。[voice] extra が PyNaCl と davey（DAVE/E2EE）を入れる。
+    # Discord は 2026-03 からボイスの E2EE（DAVE）を必須化しており、davey が無いと
+    # 受信どころか接続自体が拒否される。
+    "discord.py[voice]>=2.4",
+    # ボイス受信拡張（AudioSink で話者ごとに PCM を受け取る）。
+    # PyPI 版は DAVE 復号に未対応で、DAVE 必須化以降は受信が全パケット OpusError になり
+    # PCM が一切届かない（＝無応答）。upstream の対応 PR を取り込んだ fork を commit 固定で使う。
+    # upstream がマージ・リリースしたら PyPI 版（"discord-ext-voice-recv>=0.5"）へ戻すこと。
+    "discord-ext-voice-recv @ https://github.com/rdphillips7/discord-ext-voice-recv/archive/ddd28601fe556f585b869e215f29c8236b95f88f.tar.gz",
     "soundfile>=0.12.1",             # VOICEVOX が返す WAV のデコード
     "numpy>=1.24",                   # 音声フォーマット変換（リサンプル・ダウンミックス）
     "requests>=2.31",                # STT/LLM/VOICEVOX/Discord Webhook への HTTP
