@@ -15,18 +15,8 @@
 services:
   # ── STT: faster-whisper を OpenAI 互換 API で公開（GPU） ──
   stt:
-    image: ghcr.io/speaches-ai/speaches:latest-cuda   # OpenAI 互換 /v1/audio/transcriptions（例）
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu] 
-    #environment:
-    #  CUDA_DEVICE_ORDER: PCI_BUS_ID
-    #  CUDA_VISIBLE_DEVICES:
     volumes:
       - ./.cache/huggingface:/home/ubuntu/.cache/huggingface  # モデル DL キャッシュを永続化
     ports:
@@ -34,18 +24,8 @@ services:
 
   # ── TTS: VOICEVOX engine（GPU/nvidia 版） ──
   voicevox:
-    image: voicevox/voicevox_engine:nvidia-latest
+    image: voicevox/voicevox_engine:cpu-latest
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu] 
-    #environment:
-    #  CUDA_DEVICE_ORDER: PCI_BUS_ID
-    #  CUDA_VISIBLE_DEVICES:
     ports:
       - "50021:50021"   # ホストからの疎通確認用（/speakers 等）。不要なら消してよい
 
