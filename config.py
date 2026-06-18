@@ -61,36 +61,31 @@ def _env(name, default):
 
 _load_dotenv()
 
-# ───────────────────────── ウェイクワード（openWakeWord, OSS・アカウント不要） ─────────────────────────
-# 学習済みの .onnx（または .tflite）のパス。docker では compose が /app/zundamon.onnx を注入。
-OWW_MODEL_PATH = _env("OWW_MODEL_PATH", "my_custom_model/zundamon.onnx")
-OWW_FRAMEWORK = _env("OWW_FRAMEWORK", "onnx")  # "onnx" または "tflite"
-OWW_THRESHOLD = _env("OWW_THRESHOLD", 0.5)  # 検出閾値 0.0〜1.0。高いほど誤検出減
-# 誤発火対策（どちらも 0 で無効）:
-#   OWW_VAD_THRESHOLD: openWakeWord 内蔵 Silero VAD のゲート。「人の声」でない物音の発火を抑止。
-#                      0.3〜0.7 で調整（高いほど厳しい）。
-#   WAKE_MIN_RMS     : 直近約1秒の最大 RMS がこの値未満なら発火を無視。静かな環境での
-#                      ノイズ起因の発火を抑止。[wake] ログの rms= を見て決める。
-OWW_VAD_THRESHOLD = _env("OWW_VAD_THRESHOLD", 0.0)
-WAKE_MIN_RMS = _env("WAKE_MIN_RMS", 0)
+# ───────────────────────── Discord ボイスチャンネル（音声 I/O） ─────────────────────────
+# bot が常駐するボイスチャンネルからユーザーの発話を受け取り、応答音声を同じチャンネルへ流す。
+# ウェイクワードは使わず、チャンネル内の発話をそのまま聞いて応答する。
+#   DISCORD_BOT_TOKEN        : bot トークン（★秘密。.env にだけ書く）
+#   DISCORD_GUILD_ID         : 対象サーバ（ギルド）ID
+#   DISCORD_VOICE_CHANNEL_ID : 入室するボイスチャンネル ID
+DISCORD_BOT_TOKEN = _env("DISCORD_BOT_TOKEN", "")  # ★秘密。.env にだけ書く
+DISCORD_GUILD_ID = _env("DISCORD_GUILD_ID", 0)
+DISCORD_VOICE_CHANNEL_ID = _env("DISCORD_VOICE_CHANNEL_ID", 0)
 
-# ───────────────────────── 録音 / VAD（発話区間の検出） ─────────────────────────
-INPUT_DEVICE_INDEX = _env("INPUT_DEVICE_INDEX", -1)  # マイクのデバイス番号。-1 で既定デバイス
-SILENCE_RMS = _env("SILENCE_RMS", 500)  # この RMS 未満を「無音」とみなす
-SILENCE_HANG_SEC = _env("SILENCE_HANG_SEC", 0.8)  # 無音がこの秒数続いたら発話終了
-START_TIMEOUT_SEC = _env("START_TIMEOUT_SEC", 5.0)  # ウェイクワード後この秒数喋り出さなければキャンセル
-MAX_UTTERANCE_SEC = _env("MAX_UTTERANCE_SEC", 15.0)  # 1発話の最大長（保険）
+# ───────────────────────── 発話区間（セグメンテーション） ─────────────────────────
+# Discord は「喋っている間だけ」音声パケットを送るため、自前の RMS ベース VAD は不要。
+# 発話の終わりは voice-recv の発話停止イベント（パケット途切れ）で確定する。
+MIN_UTTERANCE_SEC = _env("MIN_UTTERANCE_SEC", 0.3)  # これより短い発話は雑音とみなして無視
+MAX_UTTERANCE_SEC = _env("MAX_UTTERANCE_SEC", 30.0)  # 1発話の最大長（保険。超過分で区切る）
 
-# ───────────────────────── STT（faster-whisper） ─────────────────────────
-WHISPER_MODEL = _env("WHISPER_MODEL", "large-v3-turbo")
-WHISPER_DEVICE = _env("WHISPER_DEVICE", "cuda")  # cuda / cpu
-WHISPER_COMPUTE = _env("WHISPER_COMPUTE", "float16")  # VRAM 節約は "int8_float16"
+# ───────────────────────── STT（リモート・OpenAI 互換） ─────────────────────────
+# faster-whisper を GPU サーバ側で OpenAI 互換サーバ（speaches / faster-whisper-server 等）として
+# 動かし、bot は HTTP の /audio/transcriptions を叩くだけにする（bot 側に GPU/CUDA は不要）。
+STT_BASE_URL = _env("STT_BASE_URL", "http://127.0.0.1:8000/v1")  # 末尾に /audio/transcriptions を付けて叩く
+STT_API_KEY = _env("STT_API_KEY", "")  # ★秘密。必要なら .env にだけ書く（不要なら空）
+STT_MODEL = _env("STT_MODEL", "Systran/faster-whisper-large-v3")  # サーバ側で読み込むモデル名
 WHISPER_LANGUAGE = _env("WHISPER_LANGUAGE", "ja")
-WHISPER_BEAM_SIZE = _env("WHISPER_BEAM_SIZE", 1)  # 1=greedy（最速）
-WHISPER_VAD_FILTER = _env("WHISPER_VAD_FILTER", False)
 STT_TIMING = _env("STT_TIMING", True)
 TURN_TIMING = _env("TURN_TIMING", True)  # LLM の初トークン/初音出し/初回合成の所要を表示
-RMS_DEBUG = _env("RMS_DEBUG", True)  # 発話/無音の RMS 分布を表示（SILENCE_RMS 調整用）
 WARMUP = _env("WARMUP", True)  # 起動時に VOICEVOX/LLM を1回温め、初回の遅延を吸収
 
 # ───────────────────────── 会話 LLM（OpenAI 互換 / llama.cpp 等） ─────────────────────────
@@ -183,22 +178,9 @@ VOICEVOX_SPEAKER = _env("VOICEVOX_SPEAKER", 3)  # 話者ID（/speakers で一覧
 VOICEVOX_SPEED = _env("VOICEVOX_SPEED", 1.0)  # 話速
 VOICEVOX_VOLUME = _env("VOICEVOX_VOLUME", 1.0)  # 音量倍率。2.0 を超える辺りから音割れに注意
 
-# ───────────────────────── 発火時の合図 ─────────────────────────
-ACK_MODE = _env("ACK_MODE", "voice")  # "voice"/"beep"/"both"/"off"
-ACK_VOICE_TEXT = _env("ACK_VOICE_TEXT", "はい")
-ACK_BEEP = _env("ACK_BEEP", True)
-
 # ───────────────────────── バージイン（応答再生中の割り込み） ─────────────────────────
-BARGE_IN_MODE = _env("BARGE_IN_MODE", "wakeword")  # "wakeword"/"energy"/"off"
-BARGE_IN_RMS = _env("BARGE_IN_RMS", 1200)
-BARGE_IN_MIN_SEC = _env("BARGE_IN_MIN_SEC", 0.25)
-
-# ───────────────────────── 会話継続モード（フォローアップ窓） ─────────────────────────
-# 応答を喋り終えた直後、ウェイクワード（「ずんだもん」）を言わずにそのまま続けて話せる
-# 「窓」を開く。毎回呼び直す手間を省くのが狙い。窓は無音で開く（合図音は鳴らさない）。
-# 窓が無言のまま FOLLOWUP_WINDOW_SEC 経過したら閉じ、ウェイクワード待ちへ戻る。
-# 閉じる瞬間だけ FOLLOWUP_CLOSE_TEXT を 1 回読み上げて「また呼んでね」と知らせる。
-FOLLOWUP_ENABLED = _env("FOLLOWUP_ENABLED", True)  # False で従来どおり毎ターン要ウェイクワード
-FOLLOWUP_WINDOW_SEC = _env("FOLLOWUP_WINDOW_SEC", 6.0)  # 窓の開始待ち（無言でこの秒数経つと閉じる）
-# 窓を閉じてウェイクワード待ちへ戻るときの読み上げ。空文字にすると合図なし（無音で閉じる）。
-FOLLOWUP_CLOSE_TEXT = _env("FOLLOWUP_CLOSE_TEXT", "また呼んでください")
+# bot が応答音声を再生している最中に、ユーザーが話し始めたら割り込みとみなして
+# 再生を即停止し、未再生の合成キューを捨てる。Discord はパケット到来＝発話開始なので
+# RMS 閾値は不要。短い物音での誤割り込みを防ぐため、最低発話継続秒だけ設ける。
+BARGE_IN_ENABLED = _env("BARGE_IN_ENABLED", True)  # False で割り込み無効
+BARGE_IN_MIN_SEC = _env("BARGE_IN_MIN_SEC", 0.2)  # この秒数以上喋り続けたら割り込み確定

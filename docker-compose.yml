@@ -1,58 +1,52 @@
-# voice-agent + VOICEVOX engine（GPU版）を WSL2 上の docker compose でまとめて起動する。
+# voice-agent bot + STT(OpenAI互換) + VOICEVOX を docker compose でまとめて起動する。
 #
-# 前提（詳細は DOCKER.md）:
-#   - GPU      : WSL2 backend + NVIDIA ドライバ（`gpus: all` が使える）
-#   - マイク/ｽﾋﾟｰｶ: WSL2 + WSLg では WSLg の PulseAudio(unix ソケット /mnt/wslg/PulseServer)を
-#                  コンテナに bind mount して使う（下の volumes と PULSE_SERVER 参照）。
-#                  Docker Desktop + Windows 版 PulseAudio(TCP:4713) を使う場合は .env の
-#                  PULSE_SERVER を tcp:host.docker.internal:4713 にし、下の socket マウント行を外す。
-#   - config.py: ホストの config.py をそのまま bind mount（秘密情報はイメージに焼かない）
+# 構成:
+#   - voice-agent : Discord bot 本体（軽量・GPU 不要）。ボイスチャンネルに常駐し発話に応答する。
+#   - stt         : faster-whisper を OpenAI 互換 API で公開する STT サーバ（GPU）。
+#   - voicevox    : TTS（GPU）。
+#   STT/TTS は重い推論を担うため GPU が要る。bot 自体は GPU 不要なので、必要なら
+#   stt / voicevox だけを GPU サーバに置き、bot を別ホストで動かして URL を向けてもよい
+#   （その場合 .env の STT_BASE_URL / VOICEVOX_URL をリモートのアドレスにする）。
 #
-# 使い方:  docker compose up --build
+# 使い方:
+#   cp .env.example .env   # DISCORD_BOT_TOKEN / DISCORD_VOICE_CHANNEL_ID 等を設定
+#   docker compose up --build
 
 services:
+  # ── STT: faster-whisper を OpenAI 互換 API で公開（GPU） ──
+  stt:
+    image: ghcr.io/speaches-ai/speaches:latest-cuda   # OpenAI 互換 /v1/audio/transcriptions（例）
+    restart: unless-stopped
+    gpus: all
+    volumes:
+      - ./.cache/huggingface:/home/ubuntu/.cache/huggingface  # モデル DL キャッシュを永続化
+    ports:
+      - "8000:8000"   # ホストからの疎通確認用。不要なら消してよい
+
   # ── TTS: VOICEVOX engine（GPU/nvidia 版） ──
   voicevox:
     image: voicevox/voicevox_engine:nvidia-latest
     restart: unless-stopped
-    gpus: all                      # Compose v2.30+ / Docker Desktop。古い場合は下の deploy 形式を使う
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    gpus: all
     ports:
-      - "50021:50021"              # ホストからの疎通確認用（/speakers 等）。不要なら消してよい
+      - "50021:50021"   # ホストからの疎通確認用（/speakers 等）。不要なら消してよい
 
-  # ── 音声エージェント本体（ウェイクワード→STT→LLM→TTS のパイプライン） ──
+  # ── Discord bot 本体（軽量・GPU 不要） ──
   voice-agent:
     build:
       context: .
       dockerfile: Dockerfile
     image: voice-agent:latest
-    restart: unless-stopped        # WSL/Docker 再起動後も自動で復帰させる
-    gpus: all                      # faster-whisper(CUDA) 用
+    restart: unless-stopped
     depends_on:
+      - stt
       - voicevox
     # 設定値は .env から注入する（唯一の編集面。config.py は触らない）
     env_file:
       - .env
-    # Docker 固有の値だけはここで上書き（.env より優先）
+    # 同 compose 内のサービスを指す値はここで上書き（.env より優先）
     environment:
-      PULSE_SERVER: ${PULSE_SERVER:-unix:/mnt/wslg/PulseServer}     # WSLg の PulseAudio(下で同パスに mount)
-      VOICEVOX_URL: http://voicevox:50021                           # 同 compose 内の TTS を参照
-      OWW_MODEL_PATH: /app/zundamon.onnx                            # 下の bind mount 先
-    extra_hosts:
-      - "host.docker.internal:host-gateway"   # Linux 互換のため明示（Docker Desktop では自動でも可）
-    volumes:
-      - ./my_custom_model/zundamon.onnx:/app/zundamon.onnx:ro  # 学習済みウェイクワードモデル
-      # faster-whisper(Whisper) の DL キャッシュを永続化（HF_HOME=/cache/hf）。
-      # 初回だけ DL し、以降の起動は再利用する。ホスト側に root 所有で作られる点に注意。
-      - ./.cache/huggingface:/cache/hf
-      # WSLg の PulseAudio ソケットをコンテナへ（ホストと同じパスに置き、PULSE_SERVER と一致させる）。
-      # Docker Desktop + TCP 構成の場合はこの行を外す。
-      - /mnt/wslg/PulseServer:/mnt/wslg/PulseServer
-    stdin_open: true               # ログ表示と Ctrl+C のため
+      STT_BASE_URL: http://stt:8000/v1
+      VOICEVOX_URL: http://voicevox:50021
+    stdin_open: true   # ログ表示と Ctrl+C のため
     tty: true

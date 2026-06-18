@@ -4,27 +4,22 @@
 # パッケージ化はしないので [project] テーブルは置かない（フラットなスクリプト構成のまま）。
 #
 #   開発(macOS):  pip install --group dev      # 重い実行依存を巻き込まず ruff/mypy/pre-commit だけ
-#   Windows実機:  pip install --group runtime --group cuda
-#   Docker:       pip install --group runtime  # cuBLAS/cuDNN は土台イメージが提供するので cuda は入れない
+#   bot 実行:     pip install --group runtime  # STT/TTS はリモート HTTP なので bot 側に GPU は不要
+#   Docker:       pip install --group runtime
 #
 # pip<25.1（--group 非対応）の場合のフォールバックは README / Makefile を参照。
 
 [dependency-groups]
-# ── 実行時のコア依存（プラットフォーム非依存） ──
+# ── 実行時のコア依存（プラットフォーム非依存・GPU 不要） ──
+# STT(faster-whisper) と TTS(VOICEVOX) は GPU サーバ側の HTTP サービスに分離したため、
+# bot 側にはモデルや CUDA を持たない。音声 I/O は Discord ボイスチャンネルで行う。
 runtime = [
-    "faster-whisper>=1.0.0",
-    "openwakeword>=0.6.0",   # ウェイクワード検出（OSS, onnxruntime 同梱）
-    "pvrecorder>=1.2.0",     # マイク録音のみ（Apache-2.0, キー不要）
-    "sounddevice>=0.4.6",
-    "soundfile>=0.12.1",
-    "numpy>=1.24",
-    "requests>=2.31",
-]
-# ── Windows で faster-whisper を CUDA 実行するための cuBLAS/cuDNN 同梱 wheel ──
-# Docker は cuDNN 付き CUDA ランタイムイメージが提供するため入れない。
-cuda = [
-    "nvidia-cublas-cu12",
-    "nvidia-cudnn-cu12",
+    "discord.py>=2.4",               # Discord bot 本体（voice 送信。pynacl で音声対応）
+    "discord-ext-voice-recv>=0.5",   # ボイス受信拡張（AudioSink で話者ごとに PCM を受け取る）
+    "PyNaCl>=1.5",                   # voice の暗号化（discord.py の voice に必須）
+    "soundfile>=0.12.1",             # VOICEVOX が返す WAV のデコード
+    "numpy>=1.24",                   # 音声フォーマット変換（リサンプル・ダウンミックス）
+    "requests>=2.31",                # STT/LLM/VOICEVOX/Discord Webhook への HTTP
 ]
 # ── 開発ツールのみ（runtime を include しない＝macOS で軽量に入る） ──
 dev = [
@@ -44,15 +39,10 @@ force-exclude = true
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 
-[tool.ruff.lint.per-file-ignores]
-# voice_agent.py は faster_whisper(CTranslate2) を import する前に CUDA DLL 検索パスを
-# 通す必要があり、_register_cuda_dll_dirs() 呼び出し後に import を置く設計（意図的）。
-"voice_agent.py" = ["E402"]
-
 # ───────────────────────── mypy（型チェック・段階的strict） ─────────────────────────
 [tool.mypy]
 python_version = "3.12"
-files = ["voice_agent.py", "config.py"]   # 本体のみ。train_local は対象外
+files = ["voice_agent.py", "config.py", "discord_agent.py"]   # 本体のみ。train_local は対象外
 # 中程度strict のベースライン（まず green を作る。disallow_untyped_defs 等は次フェーズで ratchet）
 warn_redundant_casts = true
 warn_unused_ignores = true
@@ -65,11 +55,8 @@ check_untyped_defs = true
 # （macOS 開発環境には重い実行依存を入れないため）。自前コード側の整合性だけを検査する。
 [[tool.mypy.overrides]]
 module = [
-    "faster_whisper",
-    "openwakeword",
-    "openwakeword.*",
-    "pvrecorder",
-    "sounddevice",
+    "discord",
+    "discord.*",
     "soundfile",
     "numpy",
     "requests",
