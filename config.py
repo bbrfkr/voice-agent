@@ -85,10 +85,10 @@ SILENCE_HANG_SEC = _env("SILENCE_HANG_SEC", 0.6)  # 最後の受信からこの�
 # 動かし、bot は HTTP の /audio/transcriptions を叩くだけにする（bot 側に GPU/CUDA は不要）。
 STT_BASE_URL = _env("STT_BASE_URL", "http://127.0.0.1:8000/v1")  # 末尾に /audio/transcriptions を付けて叩く
 STT_API_KEY = _env("STT_API_KEY", "")  # ★秘密。必要なら .env にだけ書く（不要なら空）
-# サーバ側で読み込むモデル名（HF リポジトリ ID）。
-# 従来ローカルで使っていた faster-whisper の "large-v3-turbo" は、内部で
-# "mobiuslabsgmbh/faster-whisper-large-v3-turbo" に解決される＝下の既定値と同一モデル。
-STT_MODEL = _env("STT_MODEL", "mobiuslabsgmbh/faster-whisper-large-v3-turbo")
+# サーバ側で読み込むモデル名（HF リポジトリ ID）。speaches のモデルレジストリに
+# 載っている ID であること（載っていないと download も transcribe も 404 になる）。
+# large-v3-turbo 相当の CTranslate2 版。CPU でも実用的な速度。
+STT_MODEL = _env("STT_MODEL", "deepdml/faster-whisper-large-v3-turbo-ct2")
 WHISPER_LANGUAGE = _env("WHISPER_LANGUAGE", "ja")
 STT_TIMING = _env("STT_TIMING", True)
 TURN_TIMING = _env("TURN_TIMING", True)  # LLM の初トークン/初音出し/初回合成の所要を表示

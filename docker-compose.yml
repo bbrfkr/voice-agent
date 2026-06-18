@@ -15,19 +15,37 @@
 services:
   # ── STT: faster-whisper を OpenAI 互換 API で公開（GPU） ──
   stt:
-    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    image: ghcr.io/speaches-ai/speaches:latest-cuda
     restart: unless-stopped
+    # speaches は初回リクエストで自動 DL しない。起動時にこのモデルを先読み DL させる。
+    # 未指定だと /v1/audio/transcriptions が「model is not installed」で 404 になる。
+    # 値は STT_MODEL（.env / bot 側）と一致させること。レジストリに無い ID は起動時に失敗する。
+    environment:
+      PRELOAD_MODELS: '["deepdml/faster-whisper-large-v3-turbo-ct2"]'
     volumes:
       - ./.cache/huggingface:/home/ubuntu/.cache/huggingface  # モデル DL キャッシュを永続化
     ports:
       - "8000:8000"   # ホストからの疎通確認用。不要なら消してよい
-
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
   # ── TTS: VOICEVOX engine（GPU/nvidia 版） ──
   voicevox:
-    image: voicevox/voicevox_engine:cpu-latest
+    image: voicevox/voicevox_engine:nvidia-0.26.0-dev
     restart: unless-stopped
     ports:
       - "50021:50021"   # ホストからの疎通確認用（/speakers 等）。不要なら消してよい
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # ── Discord bot 本体（軽量・GPU 不要） ──
   voice-agent:
