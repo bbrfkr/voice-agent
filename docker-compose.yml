@@ -1,14 +1,16 @@
-# voice-agent + VOICEVOX engine（GPU版）を WSL2 上の docker compose でまとめて起動する。
+# voice-agent（Web サーバ）+ VOICEVOX engine（GPU版）を docker compose でまとめて起動する。
+#
+# 音声の入出力はブラウザ（getUserMedia / AudioContext）が担うため、PulseAudio のマウントや
+# PULSE_SERVER は不要になった（旧構成からの大きな変更点）。ブラウザで
+# http://localhost:8000 を開いて操作する。
 #
 # 前提（詳細は DOCKER.md）:
 #   - GPU      : WSL2 backend + NVIDIA ドライバ（`gpus: all` が使える）
-#   - マイク/ｽﾋﾟｰｶ: WSL2 + WSLg では WSLg の PulseAudio(unix ソケット /mnt/wslg/PulseServer)を
-#                  コンテナに bind mount して使う（下の volumes と PULSE_SERVER 参照）。
-#                  Docker Desktop + Windows 版 PulseAudio(TCP:4713) を使う場合は .env の
-#                  PULSE_SERVER を tcp:host.docker.internal:4713 にし、下の socket マウント行を外す。
-#   - config.py: ホストの config.py をそのまま bind mount（秘密情報はイメージに焼かない）
+#   - マイク    : ブラウザの getUserMedia。secure context が必須なので、同一マシンなら
+#                http://localhost:8000 を使う（LAN の別端末から使う場合は TLS が必要。README 参照）。
+#   - config.py: env 駆動のローダ。秘密情報はイメージに焼かず .env から注入する。
 #
-# 使い方:  docker compose up --build
+# 使い方:  docker compose up --build  → ブラウザで http://localhost:8000
 
 services:
   # ── TTS: VOICEVOX engine（GPU/nvidia 版） ──
@@ -26,7 +28,7 @@ services:
     ports:
       - "50021:50021"              # ホストからの疎通確認用（/speakers 等）。不要なら消してよい
 
-  # ── 音声エージェント本体（ウェイクワード→STT→LLM→TTS のパイプライン） ──
+  # ── 音声エージェント本体（FastAPI: STT→LLM→TTS のオーケストレーション + Web UI） ──
   voice-agent:
     build:
       context: .
@@ -41,18 +43,14 @@ services:
       - .env
     # Docker 固有の値だけはここで上書き（.env より優先）
     environment:
-      PULSE_SERVER: ${PULSE_SERVER:-unix:/mnt/wslg/PulseServer}     # WSLg の PulseAudio(下で同パスに mount)
-      VOICEVOX_URL: http://voicevox:50021                           # 同 compose 内の TTS を参照
-      OWW_MODEL_PATH: /app/zundamon.onnx                            # 下の bind mount 先
+      VOICEVOX_URL: http://voicevox:50021   # 同 compose 内の TTS を参照
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8000
     extra_hosts:
-      - "host.docker.internal:host-gateway"   # Linux 互換のため明示（Docker Desktop では自動でも可）
+      - "host.docker.internal:host-gateway"   # llama.cpp / opencode をホストで動かす場合の参照用
+    ports:
+      - "8000:8000"                # Web UI / API（ブラウザでここを開く）
     volumes:
-      - ./my_custom_model/zundamon.onnx:/app/zundamon.onnx:ro  # 学習済みウェイクワードモデル
       # faster-whisper(Whisper) の DL キャッシュを永続化（HF_HOME=/cache/hf）。
       # 初回だけ DL し、以降の起動は再利用する。ホスト側に root 所有で作られる点に注意。
       - ./.cache/huggingface:/cache/hf
-      # WSLg の PulseAudio ソケットをコンテナへ（ホストと同じパスに置き、PULSE_SERVER と一致させる）。
-      # Docker Desktop + TCP 構成の場合はこの行を外す。
-      - /mnt/wslg/PulseServer:/mnt/wslg/PulseServer
-    stdin_open: true               # ログ表示と Ctrl+C のため
-    tty: true

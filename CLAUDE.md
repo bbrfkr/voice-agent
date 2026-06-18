@@ -7,7 +7,7 @@
 - **コードを変更したら、コミット前に必ず `make check` を実行する**（ruff lint + mypy 型チェック）。
   エラーが残っているコミットはしない。
 - フォーマットは `make format`（ruff）。lint/型/フォーマットの設定はすべて `pyproject.toml` に集約。
-- 型チェック対象は本体（`voice_agent.py` / `config.py`）。`train_local/` は対象外。
+- 型チェック対象は本体（`core/` / `server/` / `config.py`）。`train_local/` は対象外。
 - 型注釈は段階的に増やす方針。新規・変更コードには可能な範囲で型注釈を付ける。
 
 この担保は `AI生成コードのQA戦略`（「型とlintは無料の担保」「必ず実行される仕組みを入れる」）に基づく。

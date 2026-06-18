@@ -11,12 +11,14 @@
 
 [dependency-groups]
 # ── 実行時のコア依存（プラットフォーム非依存） ──
+# 音声入出力はブラウザ（getUserMedia / AudioContext）が担うため、サーバは PortAudio/
+# PulseAudio 系（pvrecorder / sounddevice / soundfile）も openWakeWord も持たない。
+# 音声デコードは faster-whisper が連れてくる PyAV(av) が担う。
 runtime = [
     "faster-whisper>=1.0.0",
-    "openwakeword>=0.6.0",   # ウェイクワード検出（OSS, onnxruntime 同梱）
-    "pvrecorder>=1.2.0",     # マイク録音のみ（Apache-2.0, キー不要）
-    "sounddevice>=0.4.6",
-    "soundfile>=0.12.1",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",  # FastAPI の UploadFile（/api/transcribe）に必要
     "numpy>=1.24",
     "requests>=2.31",
 ]
@@ -44,15 +46,10 @@ force-exclude = true
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 
-[tool.ruff.lint.per-file-ignores]
-# voice_agent.py は faster_whisper(CTranslate2) を import する前に CUDA DLL 検索パスを
-# 通す必要があり、_register_cuda_dll_dirs() 呼び出し後に import を置く設計（意図的）。
-"voice_agent.py" = ["E402"]
-
 # ───────────────────────── mypy（型チェック・段階的strict） ─────────────────────────
 [tool.mypy]
 python_version = "3.12"
-files = ["voice_agent.py", "config.py"]   # 本体のみ。train_local は対象外
+files = ["core", "server", "config.py"]   # 本体のみ。train_local は対象外
 # 中程度strict のベースライン（まず green を作る。disallow_untyped_defs 等は次フェーズで ratchet）
 warn_redundant_casts = true
 warn_unused_ignores = true
@@ -66,12 +63,10 @@ check_untyped_defs = true
 [[tool.mypy.overrides]]
 module = [
     "faster_whisper",
-    "openwakeword",
-    "openwakeword.*",
-    "pvrecorder",
-    "sounddevice",
-    "soundfile",
     "numpy",
     "requests",
+    "fastapi",
+    "fastapi.*",
+    "uvicorn",
 ]
 ignore_missing_imports = true

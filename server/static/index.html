@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ずんだもん 音声エージェント</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>ずんだもん 音声エージェント</h1>
+    <span id="status" class="status">接続中…</span>
+  </header>
+
+  <main>
+    <div id="log" class="log" aria-live="polite"></div>
+  </main>
+
+  <footer>
+    <button id="ptt" class="ptt" disabled>
+      <span class="ptt-label">押している間だけ話す</span>
+      <span class="ptt-hint">（スペースキーでも可）</span>
+    </button>
+
+    <div class="controls">
+      <label class="toggle">
+        <input type="checkbox" id="logmode" />
+        ログモード（Discord へ直送）
+      </label>
+      <label>
+        話者ID
+        <input type="number" id="speaker" min="0" value="3" />
+      </label>
+      <label>
+        話速
+        <input type="number" id="speed" min="0.5" max="2.0" step="0.1" value="1.0" />
+      </label>
+    </div>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
