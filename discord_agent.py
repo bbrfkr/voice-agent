@@ -136,6 +136,7 @@ class SegmentSink(voice_recv.AudioSink):
         self._lock = threading.Lock()
         self._bufs: dict[int, list[bytes]] = {}
         self._lens: dict[int, int] = {}
+        self._seen: set[int] = set()  # 受信デバッグ: 話者ごとに初回パケットを 1 度だけ通知
         self._barge_min = int(C.BARGE_IN_MIN_SEC * _BYTES_PER_SEC)
         self._max_bytes = int(C.MAX_UTTERANCE_SEC * _BYTES_PER_SEC)
 
@@ -149,6 +150,9 @@ class SegmentSink(voice_recv.AudioSink):
         if not pcm:
             return
         uid = user.id
+        if uid not in self._seen:
+            self._seen.add(uid)
+            print(f"[recv] {getattr(user, 'display_name', uid)} の音声パケット受信を確認")
         with self._lock:
             buf = self._bufs.setdefault(uid, [])
             prev = self._lens.get(uid, 0)
@@ -164,6 +168,7 @@ class SegmentSink(voice_recv.AudioSink):
 
     @voice_recv.AudioSink.listener()
     def on_voice_member_speaking_stop(self, member) -> None:
+        print(f"[recv] 発話停止イベント: {getattr(member, 'display_name', member)}")
         self._finalize(member.id, member)
 
     def _finalize(self, uid: int, member) -> None:
@@ -233,7 +238,9 @@ class Agent:
         assert self.speaker is not None
         loop = asyncio.get_running_loop()
         audio = va.discord_pcm_to_16k_mono(pcm)
+        dur = audio.size / va.SAMPLE_RATE
         if audio.size < int(C.MIN_UTTERANCE_SEC * va.SAMPLE_RATE):
+            print(f"[recv] 発話が短すぎてスキップ（{dur:.2f}s < {C.MIN_UTTERANCE_SEC}s）")
             return
         t_end = time.monotonic()  # 発話完了時刻（総遅延の起点）
         text = await loop.run_in_executor(None, va.transcribe, audio)
