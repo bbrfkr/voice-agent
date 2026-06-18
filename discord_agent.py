@@ -126,8 +126,14 @@ class DiscordPlayer:
 
 # ───────────────────────────────── 受信（発話のバッファリングと確定） ─────────────────────────────────
 class SegmentSink(voice_recv.AudioSink):
-    """話者ごとに受信 PCM をバッファし、発話停止で 1 発話として確定する。
-    再生中にユーザーが一定時間話し続けたらバージイン（割り込み）を発火する。"""
+    """話者ごとに受信 PCM をバッファし、無音ハング（最後の受信から一定時間パケットが
+    来ないこと）で 1 発話として確定する。確定の起動は flush_idle() を定期的に呼ぶ側が行う。
+    再生中にユーザーが一定時間話し続けたらバージイン（割り込み）を発火する。
+
+    voice-recv の発話停止イベント（on_voice_member_speaking_stop）はメンバー解決
+    guild.get_member に依存し、話者がギルドのメンバーキャッシュに無いと発火しない。
+    write 側は client.get_user フォールバックで動くため「受信できるのに確定しない」が起きる。
+    これを避けるため、確定はライブラリのイベントに頼らず自前の無音ハングで行う。"""
 
     def __init__(self, agent: "Agent"):
         super().__init__()
@@ -136,9 +142,12 @@ class SegmentSink(voice_recv.AudioSink):
         self._lock = threading.Lock()
         self._bufs: dict[int, list[bytes]] = {}
         self._lens: dict[int, int] = {}
+        self._last: dict[int, float] = {}  # 話者ごとの最終受信時刻（無音ハング判定）
+        self._members: dict[int, object] = {}  # 確定時に submit へ渡す話者オブジェクト
         self._seen: set[int] = set()  # 受信デバッグ: 話者ごとに初回パケットを 1 度だけ通知
         self._barge_min = int(C.BARGE_IN_MIN_SEC * _BYTES_PER_SEC)
         self._max_bytes = int(C.MAX_UTTERANCE_SEC * _BYTES_PER_SEC)
+        self._hang = C.SILENCE_HANG_SEC
 
     def wants_opus(self) -> bool:
         return False
@@ -159,6 +168,8 @@ class SegmentSink(voice_recv.AudioSink):
             buf.append(pcm)
             new_len = prev + len(pcm)
             self._lens[uid] = new_len
+            self._last[uid] = time.monotonic()
+            self._members[uid] = user
             over_max = new_len >= self._max_bytes
         # バージイン: 再生中に最低継続秒を超えた「瞬間」に 1 回だけ割り込む
         if C.BARGE_IN_ENABLED and self.agent.is_speaking() and prev < self._barge_min <= new_len:
@@ -166,10 +177,14 @@ class SegmentSink(voice_recv.AudioSink):
         if over_max:  # 最大長で強制確定（保険）
             self._finalize(uid, user)
 
-    @voice_recv.AudioSink.listener()
-    def on_voice_member_speaking_stop(self, member) -> None:
-        print(f"[recv] 発話停止イベント: {getattr(member, 'display_name', member)}")
-        self._finalize(member.id, member)
+    def flush_idle(self) -> None:
+        """無音ハングを超えた話者の発話を確定する。定期的に呼ばれる（イベントループ側）。"""
+        now = time.monotonic()
+        with self._lock:
+            due = [uid for uid, t in self._last.items() if now - t >= self._hang and self._bufs.get(uid)]
+            members = {uid: self._members.get(uid) for uid in due}
+        for uid in due:
+            self._finalize(uid, members[uid])
 
     def _finalize(self, uid: int, member) -> None:
         if getattr(member, "bot", False):
@@ -177,6 +192,8 @@ class SegmentSink(voice_recv.AudioSink):
         with self._lock:
             chunks = self._bufs.pop(uid, None)
             self._lens.pop(uid, None)
+            self._last.pop(uid, None)
+            self._members.pop(uid, None)
         if not chunks:
             return
         pcm = b"".join(chunks)
@@ -186,6 +203,8 @@ class SegmentSink(voice_recv.AudioSink):
         with self._lock:
             self._bufs.clear()
             self._lens.clear()
+            self._last.clear()
+            self._members.clear()
 
 
 # ───────────────────────────────── オーケストレーション ─────────────────────────────────
@@ -193,6 +212,7 @@ class Agent:
     def __init__(self, loop: asyncio.AbstractEventLoop):
         self.loop = loop
         self.vc: voice_recv.VoiceRecvClient | None = None
+        self.sink: SegmentSink | None = None
         self.player: DiscordPlayer | None = None
         self.speaker: va.Speaker | None = None
         self.opencode = va.OpenCode()
@@ -223,6 +243,13 @@ class Agent:
 
     def submit_utterance(self, member, pcm: bytes) -> None:
         self._utterances.put_nowait((member, pcm))
+
+    async def flush_loop(self) -> None:
+        """無音ハングで発話を確定させる定期タスク（ライブラリの発話停止イベントに依存しない）。"""
+        while True:
+            await asyncio.sleep(0.1)
+            if self.sink is not None:
+                self.sink.flush_idle()
 
     async def consume(self) -> None:
         while True:
@@ -330,10 +357,21 @@ async def _run() -> None:
                 file=sys.stderr,
             )
             return
+        # 話者をギルドのメンバーキャッシュに載せておく（display_name 解決や、
+        # ライブラリ側のメンバー依存処理の保険）。members インテントが有効なら
+        # 起動時チャンクで埋まるが、念のため明示的に取り込む。失敗は無視。
+        if not channel.guild.chunked:
+            try:
+                await channel.guild.chunk()
+            except Exception as e:
+                print(f"[discord] メンバーチャンク取得に失敗（無視）: {e}", file=sys.stderr)
         vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
         agent.attach_voice(vc)
-        vc.listen(SegmentSink(agent))
+        sink = SegmentSink(agent)
+        agent.sink = sink
+        vc.listen(sink)
         loop.create_task(agent.consume())
+        loop.create_task(agent.flush_loop())  # 無音ハングで発話を確定
         print(f"[discord] ボイスチャンネル『{channel.name}』に接続。発話を待っています（Ctrl+C で終了）。")
 
     await client.start(C.DISCORD_BOT_TOKEN)

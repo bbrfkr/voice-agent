@@ -73,9 +73,12 @@ DISCORD_VOICE_CHANNEL_ID = _env("DISCORD_VOICE_CHANNEL_ID", 0)
 
 # ───────────────────────── 発話区間（セグメンテーション） ─────────────────────────
 # Discord は「喋っている間だけ」音声パケットを送るため、自前の RMS ベース VAD は不要。
-# 発話の終わりは voice-recv の発話停止イベント（パケット途切れ）で確定する。
+# 発話の終わりは「最後にパケットを受けてから一定時間パケットが来ない」ことで確定する。
+# （voice-recv の発話停止イベントはメンバー解決 guild.get_member に依存し、解決できないと
+#   発火しないため、これに頼らず自前の無音ハングで区切る。）
 MIN_UTTERANCE_SEC = _env("MIN_UTTERANCE_SEC", 0.3)  # これより短い発話は雑音とみなして無視
 MAX_UTTERANCE_SEC = _env("MAX_UTTERANCE_SEC", 30.0)  # 1発話の最大長（保険。超過分で区切る）
+SILENCE_HANG_SEC = _env("SILENCE_HANG_SEC", 0.6)  # 最後の受信からこの秒数パケットが来なければ発話確定
 
 # ───────────────────────── STT（リモート・OpenAI 互換） ─────────────────────────
 # faster-whisper を GPU サーバ側で OpenAI 互換サーバ（speaches / faster-whisper-server 等）として
