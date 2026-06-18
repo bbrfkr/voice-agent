@@ -299,6 +299,13 @@ async def _run() -> None:
 
     intents = discord.Intents.default()
     intents.voice_states = True
+    # voice-recv は発話者を SSRC→メンバーで解決する。発話停止イベント
+    # (on_voice_member_speaking_stop) はギルドのメンバーキャッシュ
+    # (guild.get_member) で解決できたときだけ発火し、解決できないと握り潰される。
+    # キャッシュを埋めるには特権インテント「SERVER MEMBERS INTENT」が必須
+    # （Developer Portal 側でも有効化が必要。無効のまま要求すると起動時に
+    # PrivilegedIntentsRequired で落ちる）。これが無いと発話が一切確定せず無応答になる。
+    intents.members = True
     client = discord.Client(intents=intents)
     loop = asyncio.get_running_loop()
     agent = Agent(loop)

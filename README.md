@@ -51,8 +51,10 @@ docker compose up --build
 ### Discord bot の準備
 1. [Discord Developer Portal](https://discord.com/developers/applications) で **アプリ + bot** を作成し、
    **bot トークン**を取得（`.env` の `DISCORD_BOT_TOKEN` に。★秘密）。
-2. bot を対象サーバに招待する（OAuth2 → URL Generator → scope `bot`、権限は **Connect** と **Speak**）。
-3. 入室させたいボイスチャンネルを右クリック →「**IDをコピー**」して `DISCORD_VOICE_CHANNEL_ID` に。
+2. bot 設定の **Bot → Privileged Gateway Intents** で **SERVER MEMBERS INTENT** を ON にする。
+   （発話者を解決するために必須。OFF だと voice チャンネルで一切応答しない。）
+3. bot を対象サーバに招待する（OAuth2 → URL Generator → scope `bot`、権限は **Connect** と **Speak**）。
+4. 入室させたいボイスチャンネルを右クリック →「**IDをコピー**」して `DISCORD_VOICE_CHANNEL_ID` に。
    （開発者モードが必要: ユーザー設定 → 詳細設定 → 開発者モード）
 
 ```dotenv
