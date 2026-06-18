@@ -17,7 +17,15 @@ services:
   stt:
     image: ghcr.io/speaches-ai/speaches:latest-cuda   # OpenAI 互換 /v1/audio/transcriptions（例）
     restart: unless-stopped
-    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu] 
+    #environment:
+    #  - CUDA_DEVICE_ORDER=
     volumes:
       - ./.cache/huggingface:/home/ubuntu/.cache/huggingface  # モデル DL キャッシュを永続化
     ports:
@@ -27,7 +35,15 @@ services:
   voicevox:
     image: voicevox/voicevox_engine:nvidia-latest
     restart: unless-stopped
-    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu] 
+    #environment:
+    #  - CUDA_DEVICE_ORDER=
     ports:
       - "50021:50021"   # ホストからの疎通確認用（/speakers 等）。不要なら消してよい
 
@@ -47,5 +63,4 @@ services:
     environment:
       STT_BASE_URL: http://stt:8000/v1
       VOICEVOX_URL: http://voicevox:50021
-    stdin_open: true   # ログ表示と Ctrl+C のため
-    tty: true
+
