@@ -80,7 +80,8 @@ OPENCODE_MODEL_ID=...
 ### STT サーバについて
 `docker-compose.yml` の `stt` サービスは OpenAI 互換の faster-whisper サーバ（例: `speaches`）を使う。
 `POST {STT_BASE_URL}/audio/transcriptions` に音声を投げてテキストを得る。読み込むモデルは
-`.env` の `STT_MODEL`（例 `Systran/faster-whisper-large-v3`）。別の OpenAI 互換 STT を使ってもよい。
+`.env` の `STT_MODEL`（既定 `mobiuslabsgmbh/faster-whisper-large-v3-turbo` ＝従来ローカル版の
+`large-v3-turbo` と同一モデル）。別の OpenAI 互換 STT を使ってもよい。
 
 ## 調整ポイント
 

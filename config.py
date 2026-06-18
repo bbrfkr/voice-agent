@@ -82,7 +82,10 @@ MAX_UTTERANCE_SEC = _env("MAX_UTTERANCE_SEC", 30.0)  # 1発話の最大長（保
 # 動かし、bot は HTTP の /audio/transcriptions を叩くだけにする（bot 側に GPU/CUDA は不要）。
 STT_BASE_URL = _env("STT_BASE_URL", "http://127.0.0.1:8000/v1")  # 末尾に /audio/transcriptions を付けて叩く
 STT_API_KEY = _env("STT_API_KEY", "")  # ★秘密。必要なら .env にだけ書く（不要なら空）
-STT_MODEL = _env("STT_MODEL", "Systran/faster-whisper-large-v3")  # サーバ側で読み込むモデル名
+# サーバ側で読み込むモデル名（HF リポジトリ ID）。
+# 従来ローカルで使っていた faster-whisper の "large-v3-turbo" は、内部で
+# "mobiuslabsgmbh/faster-whisper-large-v3-turbo" に解決される＝下の既定値と同一モデル。
+STT_MODEL = _env("STT_MODEL", "mobiuslabsgmbh/faster-whisper-large-v3-turbo")
 WHISPER_LANGUAGE = _env("WHISPER_LANGUAGE", "ja")
 STT_TIMING = _env("STT_TIMING", True)
 TURN_TIMING = _env("TURN_TIMING", True)  # LLM の初トークン/初音出し/初回合成の所要を表示
