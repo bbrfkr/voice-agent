@@ -113,11 +113,11 @@ footer {
   transition: width 0.05s ease;
   border-radius: 3px;
 }
-/* しきい値（15%）を示す白い縦線 */
+/* しきい値を示す白い縦線（位置は JS が --threshold-pos で更新） */
 .volume-meter-container::after {
   content: "";
   position: absolute;
-  left: 15%;
+  left: var(--threshold-pos, 15%);
   top: 0;
   width: 2px;
   height: 100%;

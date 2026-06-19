@@ -79,6 +79,11 @@ OPENCODE_MODEL_ID=...
 - **ログモード**トグル ON 中の発話は LLM/TTS を挟まず STT 結果を Discord へ直送する
   （音声メモ用。`DISCORD_WEBHOOK_URL_LOGMODE` が必要）。
 - **話者ID / 話速**は画面から切り替えられる。
+- **自動音声検出 (VAD)** トグル ON で、キーを押さず声を検知して自動録音（無音で停止）。
+  背面タブでも動く完全ハンズフリー運用向け。**検出しきい値**と**無音停止(秒)**は画面から調整可。
+- **タブが背面でもプッシュトゥトークしたい**場合は、OS のグローバルホットキーから
+  `POST /api/remote-ptt?state=start|stop` を叩く。OS 別のサンプルは
+  [`scripts/`](scripts/README.md)（Windows/AutoHotkey・Linux/sxhkd・macOS/Hammerspoon）参照。
 
 ## STT 単体 API（再利用可能）
 

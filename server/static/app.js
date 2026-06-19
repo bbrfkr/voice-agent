@@ -14,7 +14,8 @@ const logmodeEl = document.getElementById("logmode");
 const speakerEl = document.getElementById("speaker");
 const speedEl = document.getElementById("speed");
 const vadModeEl = document.getElementById("vad-mode");
-const hwMuteModeEl = document.getElementById("hw-mute-mode");
+const vadThresholdEl = document.getElementById("vad-threshold");
+const vadSilenceEl = document.getElementById("vad-silence");
 const volumeMeterContainer = document.getElementById("volume-meter-container");
 const volumeMeterBar = document.getElementById("volume-meter-bar");
 
@@ -26,17 +27,18 @@ let recording = false;
 let expectingAudio = false; // 直前の tts ヘッダに続く binary フレームを待っているか
 
 let vadEnabled = false;
-let hwMuteEnabled = false;
 let vadInterval = null;
 let vadSource = null;
 let vadAnalyser = null;
 let isSpeaking = false;
 let silenceStartTime = null;
 
-const VAD_THRESHOLD = 0.015; // 検出のしきい値
-const VAD_SILENCE_DURATION = 1200; // ms 無音が続いたら録音停止
+// VAD パラメータは UI から調整でき、localStorage に保存する（下記は既定値）。
+let VAD_THRESHOLD = 0.015; // 検出のしきい値（RMS）
+let VAD_SILENCE_DURATION = 1200; // ms 無音が続いたら録音停止
 const VAD_STORAGE_KEY = "voice-agent-vad-enabled";
-const HWMUTE_STORAGE_KEY = "voice-agent-hwmute-enabled";
+const VAD_THRESHOLD_STORAGE_KEY = "voice-agent-vad-threshold";
+const VAD_SILENCE_STORAGE_KEY = "voice-agent-vad-silence";
 
 // ───────── WebSocket ─────────
 function connect() {
@@ -265,20 +267,12 @@ window.addEventListener("keyup", (e) => {
   if (e.code === "Space" && e.target.tagName !== "INPUT") { e.preventDefault(); stopRecording(); }
 });
 
-// ───────── マイク監視制御 (VAD & 物理ミュート連動) ─────────
+// ───────── マイク監視制御 (VAD) ─────────
 async function updateMicMonitoring() {
-  const needsMic = vadEnabled || hwMuteEnabled;
-  if (!needsMic) {
+  if (!vadEnabled) {
     if (vadInterval) {
       clearInterval(vadInterval);
       vadInterval = null;
-    }
-    if (mediaStream) {
-      const track = mediaStream.getAudioTracks()[0];
-      if (track) {
-        track.removeEventListener("mute", onTrackMute);
-        track.removeEventListener("unmute", onTrackUnmute);
-      }
     }
     updateVolumeMeter(0);
     return;
@@ -290,42 +284,12 @@ async function updateMicMonitoring() {
     return;
   }
 
-  const track = mediaStream.getAudioTracks()[0];
-  if (!track) return;
-
-  // 1. 物理ミュート連動の監視設定
-  track.removeEventListener("mute", onTrackMute);
-  track.removeEventListener("unmute", onTrackUnmute);
-  if (hwMuteEnabled) {
-    track.addEventListener("mute", onTrackMute);
-    track.addEventListener("unmute", onTrackUnmute);
-    console.log("物理ミュート連動アクティブ。現在のミュート状態:", track.muted);
-  }
-
-  // 2. 音声自動検出 (VAD) の監視設定
+  // 音声自動検出 (VAD) の監視を開始
   if (vadInterval) {
     clearInterval(vadInterval);
     vadInterval = null;
   }
-  if (vadEnabled) {
-    setupVadLoop();
-  } else {
-    updateVolumeMeter(0);
-  }
-}
-
-function onTrackMute() {
-  console.log("マイクがミュートされました。録音を停止します。");
-  if (hwMuteEnabled) {
-    stopRecording();
-  }
-}
-
-function onTrackUnmute() {
-  console.log("マイクミュートが解除されました。録音を開始します。");
-  if (hwMuteEnabled) {
-    startRecording();
-  }
+  setupVadLoop();
 }
 
 function setupVadLoop() {
@@ -396,6 +360,9 @@ function updateVolumeMeter(rms) {
     return;
   }
   volumeMeterContainer.style.display = "block";
+  // しきい値の縦線位置を現在のしきい値に合わせる（メーターは rms 0.1 で 100%）。
+  const thresholdPos = Math.min(100, (VAD_THRESHOLD / 0.1) * 100);
+  volumeMeterContainer.style.setProperty("--threshold-pos", `${thresholdPos}%`);
   const percentage = Math.min(100, (rms / 0.1) * 100);
   volumeMeterBar.style.width = `${percentage}%`;
 
@@ -408,10 +375,14 @@ function updateVolumeMeter(rms) {
 
 // UIイベントの紐付けと localStorage からの復元
 vadEnabled = localStorage.getItem(VAD_STORAGE_KEY) === "true";
-hwMuteEnabled = localStorage.getItem(HWMUTE_STORAGE_KEY) === "true";
+const savedThreshold = parseFloat(localStorage.getItem(VAD_THRESHOLD_STORAGE_KEY));
+if (!Number.isNaN(savedThreshold)) VAD_THRESHOLD = savedThreshold;
+const savedSilence = parseFloat(localStorage.getItem(VAD_SILENCE_STORAGE_KEY));
+if (!Number.isNaN(savedSilence)) VAD_SILENCE_DURATION = savedSilence;
 
 vadModeEl.checked = vadEnabled;
-hwMuteModeEl.checked = hwMuteEnabled;
+vadThresholdEl.value = String(VAD_THRESHOLD);
+vadSilenceEl.value = String(VAD_SILENCE_DURATION / 1000);
 
 vadModeEl.addEventListener("change", () => {
   vadEnabled = vadModeEl.checked;
@@ -419,10 +390,27 @@ vadModeEl.addEventListener("change", () => {
   updateMicMonitoring();
 });
 
-hwMuteModeEl.addEventListener("change", () => {
-  hwMuteEnabled = hwMuteModeEl.checked;
-  localStorage.setItem(HWMUTE_STORAGE_KEY, hwMuteEnabled);
-  updateMicMonitoring();
+// しきい値・無音停止時間は録音中でも即時反映（VAD ループが毎ティック参照する）。
+vadThresholdEl.addEventListener("change", () => {
+  const v = parseFloat(vadThresholdEl.value);
+  if (!Number.isNaN(v)) {
+    VAD_THRESHOLD = v;
+    localStorage.setItem(VAD_THRESHOLD_STORAGE_KEY, String(v));
+  }
+});
+vadSilenceEl.addEventListener("change", () => {
+  const sec = parseFloat(vadSilenceEl.value);
+  if (!Number.isNaN(sec)) {
+    VAD_SILENCE_DURATION = Math.round(sec * 1000);
+    localStorage.setItem(VAD_SILENCE_STORAGE_KEY, String(VAD_SILENCE_DURATION));
+  }
+});
+
+// 背面タブでも VAD を動かすため、可視状態が戻ったら AudioContext を起こし直す。
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && vadEnabled && audioCtx && audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
 });
 
 // 初期監視開始

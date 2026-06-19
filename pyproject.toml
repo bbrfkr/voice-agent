@@ -1,13 +1,22 @@
 # voice-agent のツール設定・依存定義の一元管理。
 #
 # 実行依存も dev 依存も PEP 735 の [dependency-groups] に集約する（pip>=25.1 が必要）。
-# パッケージ化はしないので [project] テーブルは置かない（フラットなスクリプト構成のまま）。
+# パッケージ化はしない（フラットなスクリプト構成のまま）。[project] は requires-python を
+# 示すためだけの最小定義とし、[tool.uv] package=false でビルド/インストール対象から外す。
 #
 #   開発(macOS):  pip install --group dev      # 重い実行依存を巻き込まず ruff/mypy/pre-commit だけ
 #   Windows実機:  pip install --group runtime --group cuda
 #   Docker:       pip install --group runtime  # cuBLAS/cuDNN は土台イメージが提供するので cuda は入れない
 #
 # pip<25.1（--group 非対応）の場合のフォールバックは README / Makefile を参照。
+
+[project]
+name = "voice-agent"
+version = "0.0.0"
+requires-python = ">=3.12"   # uv 等が対象 Python を判定するための最小定義
+
+[tool.uv]
+package = false              # パッケージ化しない（フラットなスクリプト構成のまま）
 
 [dependency-groups]
 # ── 実行時のコア依存（プラットフォーム非依存） ──
