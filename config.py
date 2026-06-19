@@ -61,25 +61,13 @@ def _env(name, default):
 
 _load_dotenv()
 
-# ───────────────────────── ウェイクワード（openWakeWord, OSS・アカウント不要） ─────────────────────────
-# 学習済みの .onnx（または .tflite）のパス。docker では compose が /app/zundamon.onnx を注入。
-OWW_MODEL_PATH = _env("OWW_MODEL_PATH", "my_custom_model/zundamon.onnx")
-OWW_FRAMEWORK = _env("OWW_FRAMEWORK", "onnx")  # "onnx" または "tflite"
-OWW_THRESHOLD = _env("OWW_THRESHOLD", 0.5)  # 検出閾値 0.0〜1.0。高いほど誤検出減
-# 誤発火対策（どちらも 0 で無効）:
-#   OWW_VAD_THRESHOLD: openWakeWord 内蔵 Silero VAD のゲート。「人の声」でない物音の発火を抑止。
-#                      0.3〜0.7 で調整（高いほど厳しい）。
-#   WAKE_MIN_RMS     : 直近約1秒の最大 RMS がこの値未満なら発火を無視。静かな環境での
-#                      ノイズ起因の発火を抑止。[wake] ログの rms= を見て決める。
-OWW_VAD_THRESHOLD = _env("OWW_VAD_THRESHOLD", 0.0)
-WAKE_MIN_RMS = _env("WAKE_MIN_RMS", 0)
-
-# ───────────────────────── 録音 / VAD（発話区間の検出） ─────────────────────────
-INPUT_DEVICE_INDEX = _env("INPUT_DEVICE_INDEX", -1)  # マイクのデバイス番号。-1 で既定デバイス
-SILENCE_RMS = _env("SILENCE_RMS", 500)  # この RMS 未満を「無音」とみなす
-SILENCE_HANG_SEC = _env("SILENCE_HANG_SEC", 0.8)  # 無音がこの秒数続いたら発話終了
-START_TIMEOUT_SEC = _env("START_TIMEOUT_SEC", 5.0)  # ウェイクワード後この秒数喋り出さなければキャンセル
-MAX_UTTERANCE_SEC = _env("MAX_UTTERANCE_SEC", 15.0)  # 1発話の最大長（保険）
+# ───────────────────────── Web サーバ（FastAPI / uvicorn） ─────────────────────────
+# ブラウザ（Web UI）を被せて、マイク録音と音声再生はブラウザ側で行う。サーバは STT/LLM/
+# TTS のオーケストレーションと静的配信だけを担い、PulseAudio/PortAudio には一切触れない。
+SERVER_HOST = _env("SERVER_HOST", "0.0.0.0")  # 0.0.0.0 で LAN からも到達可（公開時は要 TLS/認証）
+SERVER_PORT = _env("SERVER_PORT", 8000)
+# 配信する Web UI（静的ファイル）のディレクトリ。既定はリポジトリ内 server/static。
+STATIC_DIR = _env("STATIC_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "server", "static"))
 
 # ───────────────────────── STT（faster-whisper） ─────────────────────────
 WHISPER_MODEL = _env("WHISPER_MODEL", "large-v3-turbo")
@@ -149,27 +137,11 @@ DISCORD_WEBHOOK_URL_USER = _env("DISCORD_WEBHOOK_URL_USER", "")  # ★秘密。.
 DISCORD_WEBHOOK_URL_AI = _env("DISCORD_WEBHOOK_URL_AI", "")  # ★秘密。.env にだけ書く
 
 # ───────────────────────── ログモード（STT → Discord 直送） ─────────────────────────
-# 「ずんだもん」→「ログモード」で ON。以降はウェイクワード不要の連続リスニングになり、
-# 全発話を LLM・TTS を一切挟まず STT 結果のまま専用 Webhook へ POST する
-# （音声メモ・口述筆記用）。OFF は「ずんだもん」→「ログモード終了」
-# （解除もウェイクワード経由なので、メモ本文に解除フレーズが入っても誤解除しない）。
+# Web UI のログモード切替（トグル）を ON にすると、その発話を LLM・TTS を一切挟まず
+# STT 結果のまま専用 Webhook へ POST する（音声メモ・口述筆記用）。
 # 送信先は会話ログとは**別の Webhook URL**（別チャンネルに作るのが楽）。
-# 未設定だとログモードは ON にできない（音声でその旨を案内する）。
+# 未設定だとログモードは使えない（UI でその旨を案内する）。
 DISCORD_WEBHOOK_URL_LOGMODE = _env("DISCORD_WEBHOOK_URL_LOGMODE", "")  # ★秘密。.env にだけ書く
-# 切替の発話コマンド（カンマ区切りの同義語リスト）。照合時に空白・句読点の除去と
-# ひらがな→カタカナ統一を行うので、STT の表記ゆれ（「ログ モード」「ろぐもーど」等）は
-# 自動で吸収される。誤発火対策のため発話全体が完全一致したときだけ切り替える。
-LOG_MODE_ON_COMMANDS = _env(
-    "LOG_MODE_ON_COMMANDS",
-    "ログモード,ログモード開始,ログモードを開始,ログモードオン,ログモードスタート,"
-    "ログモードにして,ログモードして,ログモードお願い",
-)
-LOG_MODE_OFF_COMMANDS = _env(
-    "LOG_MODE_OFF_COMMANDS",
-    "ログモード終了,ログモードを終了,ログモード終了して,ログモードを終了して,"
-    "ログモードオフ,ログモード解除,ログモードを解除,ログモードを解除して,"
-    "ログモードストップ,ログモードやめて,ログモードをやめて,ログモード終わり,ログモードおしまい",
-)
 
 # ───────────────────────── opencode serve（作業エージェント） ─────────────────────────
 OPENCODE_BASE_URL = _env("OPENCODE_BASE_URL", "http://127.0.0.1:4096")
@@ -183,22 +155,7 @@ VOICEVOX_SPEAKER = _env("VOICEVOX_SPEAKER", 3)  # 話者ID（/speakers で一覧
 VOICEVOX_SPEED = _env("VOICEVOX_SPEED", 1.0)  # 話速
 VOICEVOX_VOLUME = _env("VOICEVOX_VOLUME", 1.0)  # 音量倍率。2.0 を超える辺りから音割れに注意
 
-# ───────────────────────── 発火時の合図 ─────────────────────────
-ACK_MODE = _env("ACK_MODE", "voice")  # "voice"/"beep"/"both"/"off"
-ACK_VOICE_TEXT = _env("ACK_VOICE_TEXT", "はい")
-ACK_BEEP = _env("ACK_BEEP", True)
-
-# ───────────────────────── バージイン（応答再生中の割り込み） ─────────────────────────
-BARGE_IN_MODE = _env("BARGE_IN_MODE", "wakeword")  # "wakeword"/"energy"/"off"
-BARGE_IN_RMS = _env("BARGE_IN_RMS", 1200)
-BARGE_IN_MIN_SEC = _env("BARGE_IN_MIN_SEC", 0.25)
-
-# ───────────────────────── 会話継続モード（フォローアップ窓） ─────────────────────────
-# 応答を喋り終えた直後、ウェイクワード（「ずんだもん」）を言わずにそのまま続けて話せる
-# 「窓」を開く。毎回呼び直す手間を省くのが狙い。窓は無音で開く（合図音は鳴らさない）。
-# 窓が無言のまま FOLLOWUP_WINDOW_SEC 経過したら閉じ、ウェイクワード待ちへ戻る。
-# 閉じる瞬間だけ FOLLOWUP_CLOSE_TEXT を 1 回読み上げて「また呼んでね」と知らせる。
-FOLLOWUP_ENABLED = _env("FOLLOWUP_ENABLED", True)  # False で従来どおり毎ターン要ウェイクワード
-FOLLOWUP_WINDOW_SEC = _env("FOLLOWUP_WINDOW_SEC", 6.0)  # 窓の開始待ち（無言でこの秒数経つと閉じる）
-# 窓を閉じてウェイクワード待ちへ戻るときの読み上げ。空文字にすると合図なし（無音で閉じる）。
-FOLLOWUP_CLOSE_TEXT = _env("FOLLOWUP_CLOSE_TEXT", "また呼んでください")
+# 注: プッシュトゥトーク + ブラウザ録音/再生に移行したため、ウェイクワード・サーバ側 VAD・
+# 合図(ACK)・バージイン監視・フォローアップ窓に関する設定は廃止した（録音開始/終了は
+# ブラウザのボタンが、再生はブラウザの AudioContext が担い、バージインは「再生中に押す＝
+# cancel 送信」で実現する）。

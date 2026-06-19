@@ -1,0 +1,125 @@
+:root {
+  --bg: #1b1f24;
+  --panel: #242a31;
+  --accent: #5fb35f;
+  --accent-press: #4a934a;
+  --user: #2d6cdf;
+  --text: #e8eaed;
+  --muted: #9aa0a6;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #000;
+}
+header h1 { font-size: 18px; margin: 0; }
+
+.status { font-size: 13px; color: var(--muted); }
+.status.ok { color: var(--accent); }
+.status.err { color: #e06c75; }
+.status.busy { color: #e5c07b; }
+
+main { flex: 1; overflow: hidden; display: flex; }
+
+.log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bubble {
+  max-width: 75%;
+  padding: 10px 14px;
+  border-radius: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.bubble.user { align-self: flex-end; background: var(--user); }
+.bubble.ai { align-self: flex-start; background: var(--panel); }
+.bubble.sys { align-self: center; background: transparent; color: var(--muted); font-size: 13px; max-width: 90%; }
+
+footer {
+  padding: 14px 16px;
+  border-top: 1px solid #000;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ptt {
+  width: 100%;
+  padding: 18px;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 17px;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.ptt:disabled { opacity: 0.5; cursor: default; }
+.ptt.recording { background: var(--accent-press); box-shadow: 0 0 0 3px rgba(95,179,95,0.4); }
+.ptt-hint { font-size: 12px; opacity: 0.85; }
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+.controls input[type="number"] { width: 64px; background: var(--panel); color: var(--text); border: 1px solid #000; border-radius: 6px; padding: 4px; }
+.toggle { display: flex; align-items: center; gap: 6px; }
+
+/* 音量メーター */
+.volume-meter-container {
+  width: 80%;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 3px;
+  margin-top: 8px;
+  overflow: hidden;
+  position: relative;
+}
+.volume-meter-bar {
+  width: 0%;
+  height: 100%;
+  background: #e5c07b; /* 黄色（音声未検出時） */
+  transition: width 0.05s ease;
+  border-radius: 3px;
+}
+/* しきい値を示す白い縦線（位置は JS が --threshold-pos で更新） */
+.volume-meter-container::after {
+  content: "";
+  position: absolute;
+  left: var(--threshold-pos, 15%);
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.5);
+}

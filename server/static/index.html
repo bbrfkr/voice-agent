@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VOICEVOX 音声エージェント</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>VOICEVOX 音声エージェント</h1>
+    <span id="status" class="status">接続中…</span>
+  </header>
+
+  <main>
+    <div id="log" class="log" aria-live="polite"></div>
+  </main>
+
+  <footer>
+    <button id="ptt" class="ptt" disabled>
+      <span class="ptt-label">押している間だけ話す</span>
+      <span class="ptt-hint">（スペースキーでも可）</span>
+      <div id="volume-meter-container" class="volume-meter-container" style="display: none;">
+        <div id="volume-meter-bar" class="volume-meter-bar"></div>
+      </div>
+    </button>
+
+    <div class="controls">
+      <label class="toggle">
+        <input type="checkbox" id="logmode" />
+        ログモード（Discord へ直送）
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="vad-mode" />
+        自動音声検出 (VAD)
+      </label>
+      <label>
+        検出しきい値
+        <input type="number" id="vad-threshold" min="0.005" max="0.1" step="0.005" value="0.015" />
+      </label>
+      <label>
+        無音停止(秒)
+        <input type="number" id="vad-silence" min="0.3" max="3.0" step="0.1" value="1.2" />
+      </label>
+      <label>
+        話者
+        <select id="speaker">
+          <option value="">読み込み中…</option>
+        </select>
+      </label>
+      <label>
+        話速
+        <input type="number" id="speed" min="0.5" max="2.0" step="0.1" value="1.0" />
+      </label>
+    </div>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
