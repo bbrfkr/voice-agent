@@ -97,6 +97,11 @@ function handleEvent(msg) {
       else if (msg.action === "off") setLogmode(false);
       else setLogmode(!logmodeEl.checked); // toggle
       break;
+    case "remote_vad":
+      if (msg.action === "on") setVad(true);
+      else if (msg.action === "off") setVad(false);
+      else setVad(!vadEnabled); // toggle
+      break;
     case "turn_end":
       setStatus("接続済み（マイク待機）", "ok");
       break;
@@ -266,6 +271,17 @@ function setLogmode(on) {
   addBubble("sys", on ? "📝 ログモード ON（Discord へ直送）" : "💬 通常モード（会話）");
 }
 
+// ───────── 自動音声検出 (VAD) 切り替え ─────────
+// チェックボックスと内部状態を変え、グローバルホットキー等からの切り替えを画面にも反映する。
+function setVad(on) {
+  if (vadEnabled === on) return;
+  vadEnabled = on;
+  vadModeEl.checked = on;
+  localStorage.setItem(VAD_STORAGE_KEY, vadEnabled);
+  updateMicMonitoring();
+  addBubble("sys", on ? "🎙️ 自動音声検出 (VAD) ON" : "🔇 自動音声検出 (VAD) OFF");
+}
+
 // ───────── PTT 入力（ポインタ / キーボード） ─────────
 pttEl.disabled = false;
 pttEl.addEventListener("pointerdown", (e) => { e.preventDefault(); startRecording(); });
@@ -398,9 +414,7 @@ vadThresholdEl.value = String(VAD_THRESHOLD);
 vadSilenceEl.value = String(VAD_SILENCE_DURATION / 1000);
 
 vadModeEl.addEventListener("change", () => {
-  vadEnabled = vadModeEl.checked;
-  localStorage.setItem(VAD_STORAGE_KEY, vadEnabled);
-  updateMicMonitoring();
+  setVad(vadModeEl.checked);
 });
 
 // しきい値・無音停止時間は録音中でも即時反映（VAD ループが毎ティック参照する）。

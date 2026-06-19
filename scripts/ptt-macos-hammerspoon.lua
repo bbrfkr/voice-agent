@@ -1,6 +1,8 @@
 -- voice-agent — グローバル プッシュトゥトーク（macOS / Hammerspoon）
 --
--- 既定キー（F8）を「押している間だけ」録音する。ブラウザのタブが背面でも効く。
+-- 既定キー（F13）を「押している間だけ」録音する。ブラウザのタブが背面でも効く。
+-- ログモード／VAD はトグルではなく ON/OFF を別キーに割り当てて状態を確定させる
+-- （複数タブを開いていても確実に揃う）。
 --
 -- 使い方:
 --   1. Hammerspoon をインストール: https://www.hammerspoon.org/
@@ -12,8 +14,11 @@
 -- BASE（ポート）は SERVER_PORT に合わせて書き換える。
 
 local BASE = "http://localhost:8000"   -- サーバの URL
-local PTT_KEY = "f8"                    -- PTT キー
-local LOGMODE_KEY = "f9"                -- ログモード切り替えキー
+local PTT_KEY = "f13"                   -- PTT キー
+local LOGMODE_ON_KEY = "f14"            -- ログモード ON
+local LOGMODE_OFF_KEY = "f15"           -- ログモード OFF
+local VAD_ON_KEY = "f16"                -- 自動音声検出 (VAD) ON
+local VAD_OFF_KEY = "f17"               -- 自動音声検出 (VAD) OFF
 
 local function post(path)
     -- 非同期 POST。応答は使わないので無視する。
@@ -49,9 +54,20 @@ pttTap = hs.eventtap.new(
 )
 pttTap:start()
 
--- ── ログモード切り替え = F9 ──
--- 押すたびに ON/OFF が切り替わる（ON の間は STT 結果を Discord へ直送）。
--- 単発の押下なので hs.hotkey で十分。
-logmodeHotkey = hs.hotkey.bind({}, LOGMODE_KEY, function()
-    post("/api/remote-logmode?state=toggle")
+-- ── ログモード ON = F14 / OFF = F15 ──
+-- ON の間は STT 結果を Discord へ直送。単発の押下なので hs.hotkey で十分。
+logmodeOnHotkey = hs.hotkey.bind({}, LOGMODE_ON_KEY, function()
+    post("/api/remote-logmode?state=on")
+end)
+logmodeOffHotkey = hs.hotkey.bind({}, LOGMODE_OFF_KEY, function()
+    post("/api/remote-logmode?state=off")
+end)
+
+-- ── 自動音声検出 (VAD) ON = F16 / OFF = F17 ──
+-- ON の間は声を検知して自動で録音開始・無音で停止。
+vadOnHotkey = hs.hotkey.bind({}, VAD_ON_KEY, function()
+    post("/api/remote-vad?state=on")
+end)
+vadOffHotkey = hs.hotkey.bind({}, VAD_OFF_KEY, function()
+    post("/api/remote-vad?state=off")
 end)

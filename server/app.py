@@ -256,6 +256,21 @@ async def remote_logmode(state: str = "toggle") -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/api/remote-vad")
+async def remote_vad(state: str = "toggle") -> dict[str, str]:
+    """外部スクリプトなどから自動音声検出（VAD）の ON/OFF を切り替える API。
+
+    `state` には "toggle"（既定）/"on"/"off" を指定します。
+    接続中のすべてのブラウザクライアントに対して、WebSocket 経由で VAD の切り替えを指示します。
+    実際の VAD 状態はブラウザ側（チェックボックス）が保持します。
+    """
+    if state not in ("toggle", "on", "off"):
+        return {"status": "error", "message": "state must be 'toggle', 'on' or 'off'"}
+
+    await _broadcast_ws({"type": "remote_vad", "action": state})
+    return {"status": "ok"}
+
+
 # 静的ファイル（Web UI）。API/WS ルートの後にマウントして "/" 配下を配信する。
 app.mount("/", StaticFiles(directory=C.STATIC_DIR, html=True), name="static")
 
