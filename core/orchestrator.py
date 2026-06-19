@@ -149,7 +149,7 @@ def run_turn(
 
     if cancel.is_set():
         if buffer.strip():
-            print(f"ずんだもん: {buffer.strip()}（割り込みで中断）")
+            print(f"VOICEVOXエージェント: {buffer.strip()}（割り込みで中断）")
             emit({"type": "assistant", "text": buffer.strip(), "interrupted": True})
             dlog.ai(f"{buffer.strip()}（割り込みで中断）")
         messages.append({"role": "assistant", "content": buffer})
@@ -186,7 +186,7 @@ def run_turn(
         if sb.strip() and not cancel.is_set():
             tts.say(sb)
         if summary.strip():
-            print(f"ずんだもん: {summary.strip()}")
+            print(f"VOICEVOXエージェント: {summary.strip()}")
             emit({"type": "task", "status": "done", "summary": summary.strip()})
             emit({"type": "assistant", "text": summary.strip()})
             dlog.ai(summary)
@@ -195,7 +195,7 @@ def run_turn(
         if sent_buf.strip():
             tts.say(sent_buf)  # 端数を流し切る
         if buffer.strip():
-            print(f"ずんだもん: {buffer.strip()}")
+            print(f"VOICEVOXエージェント: {buffer.strip()}")
             emit({"type": "assistant", "text": buffer.strip()})
             dlog.ai(buffer)
         messages.append({"role": "assistant", "content": buffer})

@@ -1,4 +1,4 @@
-/* ずんだもん音声エージェント Web UI。
+/* VOICEVOX 音声エージェント Web UI。
  *
  * 役割:
  *   - プッシュトゥトーク（ボタン押下中 / スペースキー押下中）でマイク録音（MediaRecorder）。
@@ -13,6 +13,10 @@ const pttEl = document.getElementById("ptt");
 const logmodeEl = document.getElementById("logmode");
 const speakerEl = document.getElementById("speaker");
 const speedEl = document.getElementById("speed");
+const vadModeEl = document.getElementById("vad-mode");
+const hwMuteModeEl = document.getElementById("hw-mute-mode");
+const volumeMeterContainer = document.getElementById("volume-meter-container");
+const volumeMeterBar = document.getElementById("volume-meter-bar");
 
 let ws = null;
 let mediaStream = null;
@@ -21,13 +25,26 @@ let recChunks = [];
 let recording = false;
 let expectingAudio = false; // 直前の tts ヘッダに続く binary フレームを待っているか
 
+let vadEnabled = false;
+let hwMuteEnabled = false;
+let vadInterval = null;
+let vadSource = null;
+let vadAnalyser = null;
+let isSpeaking = false;
+let silenceStartTime = null;
+
+const VAD_THRESHOLD = 0.015; // 検出のしきい値
+const VAD_SILENCE_DURATION = 1200; // ms 無音が続いたら録音停止
+const VAD_STORAGE_KEY = "voice-agent-vad-enabled";
+const HWMUTE_STORAGE_KEY = "voice-agent-hwmute-enabled";
+
 // ───────── WebSocket ─────────
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.binaryType = "arraybuffer";
 
-  ws.onopen = () => setStatus("接続済み（マイク待機）", "ok");
+  ws.onopen = () => { setStatus("接続済み（マイク待機）", "ok"); sendConfig(); };
   ws.onclose = () => { setStatus("切断。再接続します…", "err"); setTimeout(connect, 1500); };
   ws.onerror = () => setStatus("WebSocket エラー", "err");
 
@@ -65,6 +82,13 @@ function handleEvent(msg) {
       break;
     case "tts":
       expectingAudio = true; // 次の binary フレームが wav
+      break;
+    case "remote_ptt":
+      if (msg.action === "start") {
+        startRecording();
+      } else if (msg.action === "stop") {
+        stopRecording();
+      }
       break;
     case "turn_end":
       setStatus("接続済み（マイク待機）", "ok");
@@ -178,6 +202,10 @@ function stopRecording() {
   recording = false;
   pttEl.classList.remove("recording");
   if (recorder && recorder.state !== "inactive") recorder.stop();
+
+  // VADステートのリセット
+  isSpeaking = false;
+  silenceStartTime = null;
 }
 
 async function onRecStop() {
@@ -191,12 +219,37 @@ async function onRecStop() {
 
 // ───────── 設定（話者 / 話速） ─────────
 function sendConfig() {
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (ws && ws.readyState === WebSocket.OPEN && speakerEl.value !== "") {
     ws.send(JSON.stringify({ type: "config", speaker: Number(speakerEl.value), speed: Number(speedEl.value) }));
   }
 }
 speakerEl.addEventListener("change", sendConfig);
 speedEl.addEventListener("change", sendConfig);
+
+// 話者ドロップダウンを VOICEVOX の一覧（人が読めるラベル）で組み立てる。
+// 数値の話者IDをそのまま見せず、「話者名（スタイル名）」から選べるようにする。
+async function loadSpeakers() {
+  try {
+    const res = await fetch("/api/speakers");
+    const data = await res.json();
+    const list = data.speakers || [];
+    if (list.length === 0) throw new Error("空の話者一覧");
+    speakerEl.innerHTML = "";
+    for (const s of list) {
+      const opt = document.createElement("option");
+      opt.value = String(s.id);
+      opt.textContent = s.label;
+      speakerEl.appendChild(opt);
+    }
+    // 既定の話者IDがあれば選択（無ければ先頭）。選択値をサーバへ同期しておく。
+    const def = String(data.default);
+    speakerEl.value = list.some((s) => String(s.id) === def) ? def : String(list[0].id);
+    sendConfig();
+  } catch (e) {
+    speakerEl.innerHTML = '<option value="">話者一覧を取得できません</option>';
+  }
+}
+loadSpeakers();
 
 // ───────── PTT 入力（ポインタ / キーボード） ─────────
 pttEl.disabled = false;
@@ -211,5 +264,168 @@ window.addEventListener("keydown", (e) => {
 window.addEventListener("keyup", (e) => {
   if (e.code === "Space" && e.target.tagName !== "INPUT") { e.preventDefault(); stopRecording(); }
 });
+
+// ───────── マイク監視制御 (VAD & 物理ミュート連動) ─────────
+async function updateMicMonitoring() {
+  const needsMic = vadEnabled || hwMuteEnabled;
+  if (!needsMic) {
+    if (vadInterval) {
+      clearInterval(vadInterval);
+      vadInterval = null;
+    }
+    if (mediaStream) {
+      const track = mediaStream.getAudioTracks()[0];
+      if (track) {
+        track.removeEventListener("mute", onTrackMute);
+        track.removeEventListener("unmute", onTrackUnmute);
+      }
+    }
+    updateVolumeMeter(0);
+    return;
+  }
+
+  // マイクの初期化
+  if (!(await ensureMic())) {
+    console.warn("マイクの初期化に失敗しました。");
+    return;
+  }
+
+  const track = mediaStream.getAudioTracks()[0];
+  if (!track) return;
+
+  // 1. 物理ミュート連動の監視設定
+  track.removeEventListener("mute", onTrackMute);
+  track.removeEventListener("unmute", onTrackUnmute);
+  if (hwMuteEnabled) {
+    track.addEventListener("mute", onTrackMute);
+    track.addEventListener("unmute", onTrackUnmute);
+    console.log("物理ミュート連動アクティブ。現在のミュート状態:", track.muted);
+  }
+
+  // 2. 音声自動検出 (VAD) の監視設定
+  if (vadInterval) {
+    clearInterval(vadInterval);
+    vadInterval = null;
+  }
+  if (vadEnabled) {
+    setupVadLoop();
+  } else {
+    updateVolumeMeter(0);
+  }
+}
+
+function onTrackMute() {
+  console.log("マイクがミュートされました。録音を停止します。");
+  if (hwMuteEnabled) {
+    stopRecording();
+  }
+}
+
+function onTrackUnmute() {
+  console.log("マイクミュートが解除されました。録音を開始します。");
+  if (hwMuteEnabled) {
+    startRecording();
+  }
+}
+
+function setupVadLoop() {
+  if (!mediaStream) return;
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
+
+  try {
+    if (vadSource) {
+      vadSource.disconnect();
+    }
+    vadSource = audioCtx.createMediaStreamSource(mediaStream);
+    vadAnalyser = audioCtx.createAnalyser();
+    vadAnalyser.fftSize = 256;
+    vadSource.connect(vadAnalyser);
+  } catch (e) {
+    console.error("VADノード作成失敗:", e);
+    return;
+  }
+
+  const bufferLength = vadAnalyser.fftSize;
+  const dataArray = new Float32Array(bufferLength);
+  isSpeaking = false;
+  silenceStartTime = null;
+
+  vadInterval = setInterval(() => {
+    if (!vadEnabled) return;
+    vadAnalyser.getFloatTimeDomainData(dataArray);
+
+    let sum = 0;
+    for (let i = 0; i < bufferLength; i++) {
+      sum += dataArray[i] * dataArray[i];
+    }
+    const rms = Math.sqrt(sum / bufferLength);
+
+    updateVolumeMeter(rms);
+
+    if (rms > VAD_THRESHOLD) {
+      silenceStartTime = null;
+      if (!isSpeaking && !recording) {
+        isSpeaking = true;
+        console.log(`VAD: 発話を検出しました (RMS: ${rms.toFixed(4)})`);
+        startRecording();
+      }
+    } else {
+      if (isSpeaking && recording) {
+        if (silenceStartTime === null) {
+          silenceStartTime = Date.now();
+        } else if (Date.now() - silenceStartTime > VAD_SILENCE_DURATION) {
+          isSpeaking = false;
+          silenceStartTime = null;
+          console.log("VAD: 無音時間を検知したため録音を停止します。");
+          stopRecording();
+        }
+      }
+    }
+  }, 100);
+}
+
+function updateVolumeMeter(rms) {
+  if (!volumeMeterContainer || !volumeMeterBar) return;
+  if (!vadEnabled) {
+    volumeMeterContainer.style.display = "none";
+    return;
+  }
+  volumeMeterContainer.style.display = "block";
+  const percentage = Math.min(100, (rms / 0.1) * 100);
+  volumeMeterBar.style.width = `${percentage}%`;
+
+  if (rms > VAD_THRESHOLD) {
+    volumeMeterBar.style.backgroundColor = "#5fb35f"; // 緑
+  } else {
+    volumeMeterBar.style.backgroundColor = "#e5c07b"; // 黄
+  }
+}
+
+// UIイベントの紐付けと localStorage からの復元
+vadEnabled = localStorage.getItem(VAD_STORAGE_KEY) === "true";
+hwMuteEnabled = localStorage.getItem(HWMUTE_STORAGE_KEY) === "true";
+
+vadModeEl.checked = vadEnabled;
+hwMuteModeEl.checked = hwMuteEnabled;
+
+vadModeEl.addEventListener("change", () => {
+  vadEnabled = vadModeEl.checked;
+  localStorage.setItem(VAD_STORAGE_KEY, vadEnabled);
+  updateMicMonitoring();
+});
+
+hwMuteModeEl.addEventListener("change", () => {
+  hwMuteEnabled = hwMuteModeEl.checked;
+  localStorage.setItem(HWMUTE_STORAGE_KEY, hwMuteEnabled);
+  updateMicMonitoring();
+});
+
+// 初期監視開始
+updateMicMonitoring();
 
 connect();

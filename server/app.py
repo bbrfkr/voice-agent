@@ -73,6 +73,22 @@ async def index() -> FileResponse:
     return FileResponse(os.path.join(C.STATIC_DIR, "index.html"))
 
 
+@app.get("/api/speakers")
+async def speakers() -> dict[str, Any]:
+    """VOICEVOX の話者一覧（人が選べるラベル付き）と既定の話者IDを返す。
+
+    Web UI はこれでドロップダウンを組み立てる。VOICEVOX へ到達できない場合は
+    空リストを返し、UI 側はラベルなしでも既定IDで動けるようにしておく。
+    """
+    voicevox: VoicevoxClient = SVC["voicevox"]
+    try:
+        items = await asyncio.to_thread(voicevox.speakers)
+    except Exception as e:
+        print(f"[speakers] 取得失敗（無視）: {e}")
+        items = []
+    return {"speakers": items, "default": C.VOICEVOX_SPEAKER}
+
+
 @app.post("/api/transcribe")
 async def transcribe(file: UploadFile) -> dict[str, str]:
     """音声ファイル（webm/opus/wav/mp3 等）を文字起こしして返す素の STT API。"""
@@ -82,9 +98,14 @@ async def transcribe(file: UploadFile) -> dict[str, str]:
     return {"text": text}
 
 
+# アクティブな WebSocket 接続のリスト（リモート PTT トリガー用）
+ACTIVE_WS_CONNECTIONS: set[WebSocket] = set()
+
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()
+    ACTIVE_WS_CONNECTIONS.add(ws)
     loop = asyncio.get_running_loop()
     out_q: asyncio.Queue[tuple[str, Any] | None] = asyncio.Queue()
 
@@ -185,11 +206,35 @@ async def ws_endpoint(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        ACTIVE_WS_CONNECTIONS.discard(ws)
         cur = state["cancel"]
         if isinstance(cur, threading.Event):
             cur.set()
         await out_q.put(None)
         await send_task
+
+
+@app.post("/api/remote-ptt")
+async def remote_ptt(state: str) -> dict[str, str]:
+    """外部スクリプトなどから PTT をトリガーする API。
+
+    `state` には "start" または "stop" を指定します。
+    接続中のすべてのブラウザクライアントに対して、WebSocket 経由で録音の開始/停止を指示します。
+    """
+    if state not in ("start", "stop"):
+        return {"status": "error", "message": "state must be 'start' or 'stop'"}
+
+    disconnected = []
+    for ws in ACTIVE_WS_CONNECTIONS:
+        try:
+            await ws.send_json({"type": "remote_ptt", "action": state})
+        except Exception:
+            disconnected.append(ws)
+
+    for ws in disconnected:
+        ACTIVE_WS_CONNECTIONS.discard(ws)
+
+    return {"status": "ok"}
 
 
 # 静的ファイル（Web UI）。API/WS ルートの後にマウントして "/" 配下を配信する。

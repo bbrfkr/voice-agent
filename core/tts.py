@@ -44,6 +44,28 @@ class VoicevoxClient:
             print(f"[tts] 合成 {time.monotonic() - _t0:.2f}s（{len(text)}字）")
         return r.content
 
+    def speakers(self) -> list[dict[str, object]]:
+        """VOICEVOX の話者一覧を取得し、UI 用に「話者名（スタイル名）→ 話者ID」へ平坦化する。
+
+        VOICEVOX の /speakers は話者ごとに styles（スタイル名と id）を持つネスト構造を返す。
+        合成 API が受け取るのはこの style の id（整数）なので、人が選びやすいラベルと id の
+        対応リスト [{"id": int, "label": str}, ...] を話者名→id 昇順で返す。
+        """
+        r = requests.get(f"{C.VOICEVOX_URL}/speakers", timeout=10)
+        r.raise_for_status()
+        items: list[tuple[str, int]] = []
+        for spk in r.json():
+            name = spk.get("name", "")
+            for style in spk.get("styles", []):
+                sid = style.get("id")
+                if sid is None:
+                    continue
+                style_name = style.get("name", "")
+                label = f"{name}（{style_name}）" if style_name else name
+                items.append((label, int(sid)))
+        items.sort()  # 話者名（スタイル名）のラベル順、同名は id 順
+        return [{"id": sid, "label": label} for label, sid in items]
+
     def warmup(self) -> None:
         """初回合成の JIT を温める（失敗は無視。本番ループの妨げにしない）。"""
         with contextlib.suppress(Exception):

@@ -58,7 +58,7 @@ class DiscordLogger:
         if not url or not text:
             return
         if role != "log" and self._shared:
-            name = "あなた" if role == "user" else "ずんだもん"
+            name = "あなた" if role == "user" else "VOICEVOXエージェント"
             text = f"**{name}**: {text}"
         for i in range(0, len(text), self._LIMIT):
             self.q.put((url, text[i : i + self._LIMIT]))

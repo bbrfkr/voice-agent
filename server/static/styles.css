@@ -95,3 +95,31 @@ footer {
 }
 .controls input[type="number"] { width: 64px; background: var(--panel); color: var(--text); border: 1px solid #000; border-radius: 6px; padding: 4px; }
 .toggle { display: flex; align-items: center; gap: 6px; }
+
+/* 音量メーター */
+.volume-meter-container {
+  width: 80%;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 3px;
+  margin-top: 8px;
+  overflow: hidden;
+  position: relative;
+}
+.volume-meter-bar {
+  width: 0%;
+  height: 100%;
+  background: #e5c07b; /* 黄色（音声未検出時） */
+  transition: width 0.05s ease;
+  border-radius: 3px;
+}
+/* しきい値（15%）を示す白い縦線 */
+.volume-meter-container::after {
+  content: "";
+  position: absolute;
+  left: 15%;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.5);
+}
