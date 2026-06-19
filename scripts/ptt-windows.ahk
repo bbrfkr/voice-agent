@@ -15,13 +15,17 @@
 
 BASE := "http://localhost:8000"   ; サーバの URL（SERVER_PORT に合わせる）
 
-Ptt(state) {
+Post(path) {
     try {
         req := ComObject("MSXML2.XMLHTTP.6.0")
-        req.open("POST", BASE "/api/remote-ptt?state=" state, false)
+        req.open("POST", BASE path, false)
         req.send()
     }
     ; サーバ未起動などの失敗は黙って無視する
+}
+
+Ptt(state) {
+    Post("/api/remote-ptt?state=" state)
 }
 
 active := false
@@ -38,4 +42,10 @@ F8 Up:: {
     global active
     active := false
     Ptt("stop")
+}
+
+; ── ログモード切り替え = F9 ──
+; 押すたびに ON/OFF が切り替わる（ON の間は STT 結果を Discord へ直送）。
+F9:: {
+    Post("/api/remote-logmode?state=toggle")
 }

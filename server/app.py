@@ -214,6 +214,19 @@ async def ws_endpoint(ws: WebSocket) -> None:
         await send_task
 
 
+async def _broadcast_ws(message: dict[str, Any]) -> None:
+    """接続中のすべてのブラウザクライアントへ WebSocket メッセージを送る。"""
+    disconnected = []
+    for ws in ACTIVE_WS_CONNECTIONS:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            disconnected.append(ws)
+
+    for ws in disconnected:
+        ACTIVE_WS_CONNECTIONS.discard(ws)
+
+
 @app.post("/api/remote-ptt")
 async def remote_ptt(state: str) -> dict[str, str]:
     """外部スクリプトなどから PTT をトリガーする API。
@@ -224,16 +237,22 @@ async def remote_ptt(state: str) -> dict[str, str]:
     if state not in ("start", "stop"):
         return {"status": "error", "message": "state must be 'start' or 'stop'"}
 
-    disconnected = []
-    for ws in ACTIVE_WS_CONNECTIONS:
-        try:
-            await ws.send_json({"type": "remote_ptt", "action": state})
-        except Exception:
-            disconnected.append(ws)
+    await _broadcast_ws({"type": "remote_ptt", "action": state})
+    return {"status": "ok"}
 
-    for ws in disconnected:
-        ACTIVE_WS_CONNECTIONS.discard(ws)
 
+@app.post("/api/remote-logmode")
+async def remote_logmode(state: str = "toggle") -> dict[str, str]:
+    """外部スクリプトなどからログモードの ON/OFF を切り替える API。
+
+    `state` には "toggle"（既定）/"on"/"off" を指定します。
+    接続中のすべてのブラウザクライアントに対して、WebSocket 経由でログモードの切り替えを指示します。
+    実際のログモード状態はブラウザ側（チェックボックス）が保持します。
+    """
+    if state not in ("toggle", "on", "off"):
+        return {"status": "error", "message": "state must be 'toggle', 'on' or 'off'"}
+
+    await _broadcast_ws({"type": "remote_logmode", "action": state})
     return {"status": "ok"}
 
 

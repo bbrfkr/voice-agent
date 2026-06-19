@@ -13,10 +13,15 @@
 
 local BASE = "http://localhost:8000"   -- サーバの URL
 local PTT_KEY = "f8"                    -- PTT キー
+local LOGMODE_KEY = "f9"                -- ログモード切り替えキー
+
+local function post(path)
+    -- 非同期 POST。応答は使わないので無視する。
+    hs.http.asyncPost(BASE .. path, "", nil, function() end)
+end
 
 local function ptt(state)
-    -- 非同期 POST。応答は使わないので無視する。
-    hs.http.asyncPost(BASE .. "/api/remote-ptt?state=" .. state, "", nil, function() end)
+    post("/api/remote-ptt?state=" .. state)
 end
 
 local active = false
@@ -43,3 +48,10 @@ pttTap = hs.eventtap.new(
     end
 )
 pttTap:start()
+
+-- ── ログモード切り替え = F9 ──
+-- 押すたびに ON/OFF が切り替わる（ON の間は STT 結果を Discord へ直送）。
+-- 単発の押下なので hs.hotkey で十分。
+logmodeHotkey = hs.hotkey.bind({}, LOGMODE_KEY, function()
+    post("/api/remote-logmode?state=toggle")
+end)

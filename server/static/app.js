@@ -92,6 +92,11 @@ function handleEvent(msg) {
         stopRecording();
       }
       break;
+    case "remote_logmode":
+      if (msg.action === "on") setLogmode(true);
+      else if (msg.action === "off") setLogmode(false);
+      else setLogmode(!logmodeEl.checked); // toggle
+      break;
     case "turn_end":
       setStatus("接続済み（マイク待機）", "ok");
       break;
@@ -252,6 +257,14 @@ async function loadSpeakers() {
   }
 }
 loadSpeakers();
+
+// ───────── ログモード切り替え ─────────
+// チェックボックスの状態を変え、グローバルホットキー等からの切り替えを画面にも反映する。
+function setLogmode(on) {
+  if (logmodeEl.checked === on) return;
+  logmodeEl.checked = on;
+  addBubble("sys", on ? "📝 ログモード ON（Discord へ直送）" : "💬 通常モード（会話）");
+}
 
 // ───────── PTT 入力（ポインタ / キーボード） ─────────
 pttEl.disabled = false;
