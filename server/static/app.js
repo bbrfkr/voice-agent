@@ -13,6 +13,7 @@ const pttEl = document.getElementById("ptt");
 const logmodeEl = document.getElementById("logmode");
 const speakerEl = document.getElementById("speaker");
 const speedEl = document.getElementById("speed");
+const clearEl = document.getElementById("clear");
 const vadModeEl = document.getElementById("vad-mode");
 const vadThresholdEl = document.getElementById("vad-threshold");
 const vadSilenceEl = document.getElementById("vad-silence");
@@ -40,10 +41,28 @@ const VAD_STORAGE_KEY = "voice-agent-vad-enabled";
 const VAD_THRESHOLD_STORAGE_KEY = "voice-agent-vad-threshold";
 const VAD_SILENCE_STORAGE_KEY = "voice-agent-vad-silence";
 
+// UI 状態の保存キー（ログモード・話者・話速）と、会話を引き継ぐためのセッションID。
+const LOGMODE_STORAGE_KEY = "voice-agent-logmode";
+const SPEAKER_STORAGE_KEY = "voice-agent-speaker";
+const SPEED_STORAGE_KEY = "voice-agent-speed";
+const SESSION_STORAGE_KEY = "voice-agent-session-id";
+
+// セッションIDを localStorage に保持する。これをサーバへ渡すと、リロード後も
+// サーバ側の会話履歴（LLM の文脈）と表示ログを同じセッションから引き継げる。
+function getSessionId() {
+  let sid = localStorage.getItem(SESSION_STORAGE_KEY);
+  if (!sid) {
+    sid = (crypto.randomUUID && crypto.randomUUID()) ||
+      String(Date.now()) + Math.random().toString(16).slice(2);
+    localStorage.setItem(SESSION_STORAGE_KEY, sid);
+  }
+  return sid;
+}
+
 // ───────── WebSocket ─────────
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws = new WebSocket(`${proto}://${location.host}/ws?sid=${encodeURIComponent(getSessionId())}`);
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => { setStatus("接続済み（マイク待機）", "ok"); sendConfig(); };
@@ -62,6 +81,13 @@ function connect() {
 
 function handleEvent(msg) {
   switch (msg.type) {
+    case "history":
+      // サーバが保持していた過去の会話を再生して見た目を復元する。
+      // 再接続のたびに届くため、いったんクリアしてから描き直し重複を防ぐ。
+      logEl.innerHTML = "";
+      streamingEl = null;
+      for (const e of (msg.events || [])) handleEvent(e);
+      break;
     case "stt":
       if (msg.text && msg.text.trim()) addBubble("user", msg.text);
       else addBubble("sys", "（聞き取れませんでした）");
@@ -235,8 +261,18 @@ function sendConfig() {
     ws.send(JSON.stringify({ type: "config", speaker: Number(speakerEl.value), speed: Number(speedEl.value) }));
   }
 }
-speakerEl.addEventListener("change", sendConfig);
-speedEl.addEventListener("change", sendConfig);
+speakerEl.addEventListener("change", () => {
+  localStorage.setItem(SPEAKER_STORAGE_KEY, speakerEl.value);
+  sendConfig();
+});
+speedEl.addEventListener("change", () => {
+  localStorage.setItem(SPEED_STORAGE_KEY, speedEl.value);
+  sendConfig();
+});
+
+// 話速を localStorage から復元（話者は一覧取得後に loadSpeakers で復元する）。
+const savedSpeed = parseFloat(localStorage.getItem(SPEED_STORAGE_KEY));
+if (!Number.isNaN(savedSpeed)) speedEl.value = String(savedSpeed);
 
 // 話者ドロップダウンを VOICEVOX の一覧（人が読めるラベル）で組み立てる。
 // 数値の話者IDをそのまま見せず、「話者名（スタイル名）」から選べるようにする。
@@ -253,9 +289,15 @@ async function loadSpeakers() {
       opt.textContent = s.label;
       speakerEl.appendChild(opt);
     }
-    // 既定の話者IDがあれば選択（無ければ先頭）。選択値をサーバへ同期しておく。
+    // 前回選んだ話者があればそれを、無ければ既定ID（さらに無ければ先頭）を選ぶ。
+    // 選択値はサーバへ同期しておく。
+    const saved = localStorage.getItem(SPEAKER_STORAGE_KEY);
     const def = String(data.default);
-    speakerEl.value = list.some((s) => String(s.id) === def) ? def : String(list[0].id);
+    if (saved && list.some((s) => String(s.id) === saved)) {
+      speakerEl.value = saved;
+    } else {
+      speakerEl.value = list.some((s) => String(s.id) === def) ? def : String(list[0].id);
+    }
     sendConfig();
   } catch (e) {
     speakerEl.innerHTML = '<option value="">話者一覧を取得できません</option>';
@@ -263,13 +305,33 @@ async function loadSpeakers() {
 }
 loadSpeakers();
 
+// ───────── 履歴クリア ─────────
+// サーバ側の会話履歴・表示ログ・opencode セッションを破棄し、画面も空にする。
+// サーバは空の history を返すので、ブラウザの表示はそれでクリアされる。
+clearEl.addEventListener("click", () => {
+  if (!confirm("会話履歴を消去します。よろしいですか？")) return;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "clear" }));
+  } else {
+    logEl.innerHTML = "";
+    streamingEl = null;
+  }
+});
+
 // ───────── ログモード切り替え ─────────
 // チェックボックスの状態を変え、グローバルホットキー等からの切り替えを画面にも反映する。
 function setLogmode(on) {
   if (logmodeEl.checked === on) return;
   logmodeEl.checked = on;
+  localStorage.setItem(LOGMODE_STORAGE_KEY, String(on));
   addBubble("sys", on ? "📝 ログモード ON（Discord へ直送）" : "💬 通常モード（会話）");
 }
+
+// ログモードの状態を localStorage から復元し、ユーザ操作も保存する。
+logmodeEl.checked = localStorage.getItem(LOGMODE_STORAGE_KEY) === "true";
+logmodeEl.addEventListener("change", () => {
+  localStorage.setItem(LOGMODE_STORAGE_KEY, String(logmodeEl.checked));
+});
 
 // ───────── 自動音声検出 (VAD) 切り替え ─────────
 // チェックボックスと内部状態を変え、グローバルホットキー等からの切り替えを画面にも反映する。

@@ -28,6 +28,7 @@ from core.discord_log import DiscordLogger
 from core.llm import llm_stream
 from core.opencode import OpenCode
 from core.orchestrator import TtsSink, run_turn
+from core.sessions import SessionStore
 from core.stt import WhisperService
 from core.tts import VoicevoxClient
 
@@ -41,7 +42,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     stt = WhisperService()
     voicevox = VoicevoxClient()
     dlog = DiscordLogger()
-    SVC.update(stt=stt, voicevox=voicevox, dlog=dlog)
+    # 会話セッションのディスク永続化（SESSION_STORE_DIR が空なら無効＝メモリのみ）。
+    store: SessionStore | None = None
+    if C.SESSION_STORE_DIR:
+        store = SessionStore(C.SESSION_STORE_DIR)
+        SESSIONS.update(store.load_all())
+        print(f"セッション {len(SESSIONS)} 件を復元しました（{C.SESSION_STORE_DIR}）")
+    SVC.update(stt=stt, voicevox=voicevox, dlog=dlog, store=store)
     if C.WARMUP:
         print("ウォームアップ中…")
         await asyncio.to_thread(stt.warmup)
@@ -101,6 +108,30 @@ async def transcribe(file: UploadFile) -> dict[str, str]:
 # アクティブな WebSocket 接続のリスト（リモート PTT トリガー用）
 ACTIVE_WS_CONNECTIONS: set[WebSocket] = set()
 
+# sid（セッションID）単位で会話状態を保持するメモリストア。
+#   sid -> {"messages": [...], "opencode": OpenCode, "display": [表示用イベント...]}
+# 同じ sid で再接続すれば、ブラウザのリロードをまたいで LLM の文脈と見た目を引き継ぐ。
+# メモリ保持のためサーバを再起動すると消える（単一ユーザのローカル用途を想定）。
+SESSIONS: dict[str, dict[str, Any]] = {}
+
+# 履歴（リロード後の見た目復元）に残すイベント種別。
+_DISPLAY_EVENT_TYPES = {"stt", "assistant", "task", "log_saved", "error"}
+_DISPLAY_MAX = 400
+
+
+def _record_display(display: list[dict[str, Any]], event: dict[str, Any]) -> None:
+    """表示に出るイベントだけをセッションの履歴へ追記する（リロード時に再生する）。"""
+    t = event.get("type")
+    if t not in _DISPLAY_EVENT_TYPES:
+        return
+    if t == "stt" and not str(event.get("text", "")).strip():
+        return  # 空の聞き取り結果は履歴に残さない
+    if t == "task" and event.get("status") not in ("delegating", "error"):
+        return
+    display.append(event)
+    if len(display) > _DISPLAY_MAX:
+        del display[: len(display) - _DISPLAY_MAX]
+
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
@@ -109,13 +140,39 @@ async def ws_endpoint(ws: WebSocket) -> None:
     loop = asyncio.get_running_loop()
     out_q: asyncio.Queue[tuple[str, Any] | None] = asyncio.Queue()
 
-    # 接続単位の状態（会話履歴・opencode セッション・読み上げ設定）
-    messages: list[dict[str, str]] = [{"role": "system", "content": C.SYSTEM_PROMPT}]
-    opencode = OpenCode()
+    # セッション（sid）単位で会話履歴・opencode セッション・表示ログを保持する。
+    # 同じ sid なら接続をまたいで再利用し、リロード後も会話の文脈と見た目を引き継ぐ。
+    # sid 未指定の旧クライアントは保存しない一時セッションで動く（後方互換）。
+    sid = ws.query_params.get("sid") or ""
+    session = SESSIONS.get(sid)
+    if session is None:
+        session = {
+            "messages": [{"role": "system", "content": C.SYSTEM_PROMPT}],
+            "opencode": OpenCode(),
+            "display": [],
+        }
+        if sid:
+            SESSIONS[sid] = session
+    messages: list[dict[str, str]] = session["messages"]
+    opencode: OpenCode = session["opencode"]
+    display: list[dict[str, Any]] = session["display"]
+
+    # 読み上げ設定は接続単位（フロントが接続時に config を送り直す）
     settings: dict[str, Any] = {"speaker": C.VOICEVOX_SPEAKER, "speed": C.VOICEVOX_SPEED}
     state: dict[str, Any] = {"cancel": None, "worker": None}
 
+    store: SessionStore | None = SVC.get("store")
+
+    def persist() -> None:
+        """会話状態をディスクへ保存（無効時・一時セッション時は何もしない）。"""
+        if store is not None and sid:
+            try:
+                store.save(sid, session)
+            except OSError as e:
+                print(f"[session save error] {e}")
+
     def emit(event: dict) -> None:
+        _record_display(display, event)
         loop.call_soon_threadsafe(out_q.put_nowait, ("json", event))
 
     def emit_audio(seq: int, wav: bytes) -> None:
@@ -164,6 +221,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
             print(f"[turn error] {e}")
             emit({"type": "error", "message": str(e)})
             emit({"type": "turn_end"})
+        finally:
+            persist()  # ターン後に会話状態をディスクへ保存（再起動後の復元用）
 
     def start_turn(audio: bytes, mode: str) -> None:
         # 進行中のターンがあればキャンセル（バージイン）してから新ターンを開始
@@ -177,6 +236,12 @@ async def ws_endpoint(ws: WebSocket) -> None:
         t.start()
 
     send_task = asyncio.create_task(sender())
+
+    # 既存セッションがあれば、過去の会話を履歴として送り見た目を復元させる。
+    # 新規イベントより前に届くよう out_q（FIFO）へ先に積む。
+    if display:
+        await out_q.put(("json", {"type": "history", "events": list(display)}))
+
     pending_mode = "chat"
     try:
         while True:
@@ -195,6 +260,18 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     cur = state["cancel"]
                     if isinstance(cur, threading.Event):
                         cur.set()
+                elif mtype == "clear":
+                    # 会話履歴・表示ログ・opencode セッションを破棄してまっさらに戻す。
+                    cur = state["cancel"]
+                    if isinstance(cur, threading.Event):
+                        cur.set()
+                    messages[:] = [{"role": "system", "content": C.SYSTEM_PROMPT}]
+                    display.clear()
+                    opencode.session_id = None
+                    if store is not None and sid:
+                        store.delete(sid)
+                    # 空の履歴を送ってブラウザ側の表示もクリアさせる。
+                    await out_q.put(("json", {"type": "history", "events": []}))
                 elif mtype == "config":
                     if "speaker" in data:
                         settings["speaker"] = int(data["speaker"])

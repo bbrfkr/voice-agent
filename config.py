@@ -17,22 +17,20 @@ import os
 from typing import overload
 
 
-# ───────────────────────── .env ローダ / 型付き取得（依存なし） ─────────────────────────
+# ───────────────────────── .env ローダ / 型付き取得 ─────────────────────────
 def _load_dotenv():
     """このファイルと同じディレクトリの `.env` を読み、未設定の環境変数だけ埋める
-    （実際の環境変数が優先）。docker のように環境変数が既に入っていれば何もしない。"""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    （実際の環境変数が優先＝`override=False`）。docker のように環境変数が既に入っていれば
+    上書きしない。行末コメント/クオート/複数行値の解釈は python-dotenv に委譲する。
+
+    dev 環境（runtime 依存を入れない macOS など）では python-dotenv が無いことがあるため、
+    その場合は `.env` 読み込みをスキップする（環境変数 or 既定値で動く）。"""
     try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                v = v.strip().strip('"').strip("'")
-                os.environ.setdefault(k.strip(), v)
-    except FileNotFoundError:
-        pass
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    load_dotenv(path, override=False)
 
 
 # default と同じ型で返すことを型レベルでも示す（呼び出し側の定数が正しい型で効く）。
@@ -68,6 +66,13 @@ SERVER_HOST = _env("SERVER_HOST", "0.0.0.0")  # 0.0.0.0 で LAN からも到達�
 SERVER_PORT = _env("SERVER_PORT", 8000)
 # 配信する Web UI（静的ファイル）のディレクトリ。既定はリポジトリ内 server/static。
 STATIC_DIR = _env("STATIC_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "server", "static"))
+
+# 会話セッションの永続化先ディレクトリ（sid 単位の JSON を置く）。
+# 既定はリポジトリ内 data/sessions（data/ は .gitignore 済み）。サーバ再起動後も
+# 会話の文脈・表示ログ・opencode セッションを復元する。空文字でディスク保存を無効化（メモリのみ）。
+SESSION_STORE_DIR = _env(
+    "SESSION_STORE_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "sessions")
+)
 
 # ───────────────────────── STT（faster-whisper） ─────────────────────────
 WHISPER_MODEL = _env("WHISPER_MODEL", "large-v3-turbo")
