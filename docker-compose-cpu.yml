@@ -15,15 +15,8 @@
 services:
   # ── TTS: VOICEVOX engine（GPU/nvidia 版） ──
   voicevox:
-    image: voicevox/voicevox_engine:nvidia-latest
+    image: voicevox/voicevox_engine:cpu-latest
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     ports:
       - "50021:50021"              # ホストからの疎通確認用（/speakers 等）。不要なら消してよい
 
@@ -33,13 +26,6 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped        # WSL/Docker 再起動後も自動で復帰させる
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     depends_on:
       - voicevox
     # 設定値は .env から注入する（唯一の編集面。config.py は触らない）
