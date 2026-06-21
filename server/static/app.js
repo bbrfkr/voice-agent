@@ -187,6 +187,26 @@ async function ensureMic() {
   }
 }
 
+// マイクを解放する（全 track を stop して mediaStream を破棄）。
+// スマホ（特に Android Chrome）はマイク取得中にエコーキャンセルが有効だと OS が
+// 「通信モード」に入り、TTS 再生まで通話音声ストリームに乗る＝通話音量を参照してしまう。
+// PTT では録音が終わったらマイクを手放すことで、再生時はマイク非アクティブとなり
+// 通信モードに入らず、メディア音量で再生される。
+// ただし VAD モードは常時マイク監視が必要なので、その間は解放しない。
+function releaseMic() {
+  if (vadEnabled) return; // VAD 監視中はマイクを握り続ける必要がある
+  if (vadSource) {
+    try { vadSource.disconnect(); } catch (e) {}
+    vadSource = null;
+  }
+  if (mediaStream) {
+    for (const track of mediaStream.getTracks()) {
+      try { track.stop(); } catch (e) {}
+    }
+    mediaStream = null;
+  }
+}
+
 async function startRecording() {
   if (recording) return;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -222,6 +242,8 @@ function stopRecording() {
 
 async function onRecStop() {
   const blob = new Blob(recChunks, { type: recorder.mimeType || "audio/webm" });
+  // 録音データ確定後にマイクを手放す（再生をメディア音量にするため）。VAD 中は解放されない。
+  releaseMic();
   if (blob.size < 1200) { setStatus("接続済み（マイク待機）", "ok"); return; } // 短すぎ＝押し損ね
   const mode = logmodeEl.checked ? "log" : "chat";
   ws.send(JSON.stringify({ type: "utterance", mode }));
@@ -304,6 +326,7 @@ async function updateMicMonitoring() {
       vadInterval = null;
     }
     updateVolumeMeter(0);
+    releaseMic(); // VAD を切ったらマイクを手放し、再生をメディア音量に戻す
     return;
   }
 
