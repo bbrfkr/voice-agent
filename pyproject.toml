@@ -28,6 +28,7 @@ runtime = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "python-multipart>=0.0.9",  # FastAPI の UploadFile（/api/transcribe）に必要
+    "python-dotenv>=1.0",       # .env ローダ（行末コメント/クオート/複数行値を正しく解釈）
     "numpy>=1.24",
     "requests>=2.31",
 ]
@@ -77,5 +78,6 @@ module = [
     "fastapi",
     "fastapi.*",
     "uvicorn",
+    "dotenv",
 ]
 ignore_missing_imports = true
