@@ -101,6 +101,7 @@ function handleEvent(msg) {
     case "task":
       if (msg.status === "delegating") addBubble("sys", `🛠️ 作業委譲: ${msg.instruction}`);
       else if (msg.status === "error") addBubble("sys", `⚠️ 作業中にエラー: ${msg.message}`);
+      else if (msg.status === "progress") addBubble("sys", formatProgress(msg));
       break;
     case "log_saved":
       addBubble("sys", `📝 Discord へ直送: ${msg.text}`);
@@ -132,6 +133,15 @@ function handleEvent(msg) {
       setStatus("接続済み（マイク待機）", "ok");
       break;
   }
+}
+
+// 作業（[[TASK]]）中の opencode 進捗（ツール利用など）を1行に整形する。
+function formatProgress(msg) {
+  const icon = msg.state === "completed" ? "✅" : msg.state === "error" ? "⚠️" : "⚙️";
+  const label = { running: "実行中", completed: "完了", error: "失敗" }[msg.state] || msg.state;
+  const detail = (msg.title || "").trim();
+  const tool = msg.tool || "tool";
+  return `${icon} ${tool}（${label}）${detail ? ": " + detail : ""}`;
 }
 
 // ───────── 会話ログ表示 ─────────

@@ -2,7 +2,9 @@
 
 制御フローは現行どおり：
   先頭で「雑談 / [[TASK]]」を一度だけ判定 → 雑談は1文目を早出し → 文単位で TTS へ流す。
-  [[TASK]] は全文を貯めて opencode に委譲し、結果を LLM が音声向けに要約して読み上げる。
+  [[TASK]] は全文を貯めて opencode に委譲し、結果は要約せずそのまま画面へ表示する。
+  読み上げは「短ければ本文を読み、長ければ読まずに定型句だけ喋る」（長い調査結果を
+  延々と読み上げないため。しきい値は config の TASK_SPEAK_MAX_CHARS）。
 
 旧版との違いは「喋る」先が音声再生ではなく **イベント発行**になったこと：
   - 文が確定するたび TtsSink.say() → 別スレッドで VOICEVOX 合成 → emit_audio(wav) で
@@ -156,14 +158,24 @@ def run_turn(
         return
 
     if is_task:
-        instruction = buffer.lstrip()[len(TASK_SENTINEL) :].strip()
+        # [[TASK]] 以降はそのまま opencode へ渡る指示文。LLM が後ろに相槌や説明
+        # （「承知しました！…」等）を続けても拾わないよう、最初の1行だけを採用する。
+        # 読み上げ用の相槌はこの下の固定フィラーが担うので、指示文に混ぜない。
+        instruction = buffer.lstrip()[len(TASK_SENTINEL) :].split("\n", 1)[0].strip()
         messages.append({"role": "assistant", "content": buffer})
         print(f"  → opencode へ委譲: {instruction}")
         emit({"type": "task", "status": "delegating", "instruction": instruction})
         dlog.ai(f"🛠️ 作業委譲: {instruction}")
         tts.say("わかりました、やってみますね")  # 待ち時間を隠すフィラー
+
+        def on_progress(info: dict) -> None:
+            # opencode 側のツール利用などの進捗を画面へ中継する（読み上げはしない）。
+            if cancel.is_set():
+                return
+            emit({"type": "task", "status": "progress", **info})
+
         try:
-            result = opencode.run(instruction)
+            result = opencode.run(instruction, on_progress=on_progress)
         except Exception as e:
             tts.say("作業中にエラーが出ちゃいました")
             print(f"[opencode error] {e}")
@@ -171,26 +183,24 @@ def run_turn(
             dlog.ai(f"⚠️ 作業中にエラー: {e}")
             tts.wait_done()
             return
-        if cancel.is_set():  # 作業中に割り込まれたら要約しない
+        if cancel.is_set():  # 作業中に割り込まれたら何もしない
             return
-        # 結果を LLM に渡して音声向けに要約させる
-        messages.append({"role": "user", "content": f"作業結果:\n{result}\n\n{C.SUMMARIZE_PROMPT}"})
-        summary = ""
-        sb = ""
-        for delta in llm_stream(messages):
-            if cancel.is_set():
-                break
-            summary += delta
-            sb += delta
-            sb = flush_sentences(sb, tts.say)
-        if sb.strip() and not cancel.is_set():
-            tts.say(sb)
-        if summary.strip():
-            print(f"VOICEVOXエージェント: {summary.strip()}")
-            emit({"type": "task", "status": "done", "summary": summary.strip()})
-            emit({"type": "assistant", "text": summary.strip()})
-            dlog.ai(summary)
-        messages.append({"role": "assistant", "content": summary})
+        # opencode の結果は要約せず、そのまま画面・会話履歴・Discord へ流す。
+        # 表示は通常の assistant バブル（pre-wrap で複数行・コードもそのまま出る）に一本化。
+        result = result.strip()
+        print(f"VOICEVOXエージェント(作業結果): {result}")
+        emit({"type": "assistant", "text": result})
+        dlog.ai(result)
+        messages.append({"role": "assistant", "content": result})
+        # 読み上げ: 1〜3文程度に収まる短い結果は本文をそのまま読み上げる。
+        # 長い結果（調査結果など）は読み上げず、定型句だけ喋って画面を見てもらう。
+        if not cancel.is_set():
+            if result and len(result) <= C.TASK_SPEAK_MAX_CHARS:
+                rem = flush_sentences(result, tts.say)
+                if rem.strip():
+                    tts.say(rem)
+            else:
+                tts.say(C.TASK_LONG_REPLY_PHRASE)
     else:
         if sent_buf.strip():
             tts.say(sent_buf)  # 端数を流し切る

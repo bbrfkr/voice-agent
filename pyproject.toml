@@ -31,6 +31,7 @@ runtime = [
     "python-dotenv>=1.0",       # .env ローダ（行末コメント/クオート/複数行値を正しく解釈）
     "numpy>=1.24",
     "requests>=2.31",
+    "opencode-ai>=0.1.0a36",    # opencode serve への作業委譲（公式 Python SDK。プレリリース）
 ]
 # ── Windows で faster-whisper を CUDA 実行するための cuBLAS/cuDNN 同梱 wheel ──
 # Docker は cuDNN 付き CUDA ランタイムイメージが提供するため入れない。
@@ -79,5 +80,7 @@ module = [
     "fastapi.*",
     "uvicorn",
     "dotenv",
+    "opencode_ai",
+    "opencode_ai.*",
 ]
 ignore_missing_imports = true
