@@ -15,7 +15,7 @@ LAN 上のどの端末からでも（マイクのセキュアコンテキスト�
      │                                          │
      │  ◄─── WebSocket(wav + JSON) ─────  オーケストレータ ──► llama.cpp(LLM, stream)
      │   会話/タスク/ログを画面表示            ├ 通常会話 : 文ごとに VOICEVOX 合成 → wav を WS で返す
-     ▼                                          ├ [[TASK]] : opencode serve に委譲 → 結果をLLMが音声で要約
+     ▼                                          ├ [[TASK]] : opencode serve に委譲 → 結果はそのまま画面表示（短ければ読み上げ）
   AudioContext で順番に再生                     └ ログモード: STT 結果を Discord へ直送
 ```
 
@@ -108,7 +108,7 @@ webm/opus・wav・mp3 など（faster-whisper の PyAV デコードが扱える�
 
 ## Discord 会話ログ（任意）
 
-会話の内容（あなたの発話・AI の応答・作業委譲の指示と要約）を Discord チャンネルへ流せる。
+会話の内容（あなたの発話・AI の応答・作業委譲の指示と結果）を Discord チャンネルへ流せる。
 送信は**キュー + 別スレッドの投げ捨て式**なので、会話のレイテンシには乗らず、失敗しても会話は止まらない。
 
 ログを流したいチャンネルに **Webhook を2本**作り（1本目の名前を「あなた」、2本目を「VOICEVOXエージェント」に
