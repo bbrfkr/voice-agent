@@ -56,6 +56,9 @@
     </div>
   </footer>
 
+  <!-- markdown 解釈（marked）と XSS サニタイズ（DOMPurify）。外部 CDN ではなく同梱配信。 -->
+  <script src="/marked.min.js"></script>
+  <script src="/purify.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
