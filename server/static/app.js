@@ -683,3 +683,14 @@ setupTabLeadership();
 updateMicMonitoring();
 
 connect();
+
+// ───────── PWA: Service Worker 登録 ─────────
+// シェル（HTML/CSS/JS/アイコン）をキャッシュして起動を速くし、インストール可能にする。
+// セキュアコンテキスト（https / localhost）でしか登録できない点に注意。
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((e) => {
+      console.warn("Service Worker 登録に失敗:", e);
+    });
+  });
+}
