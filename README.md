@@ -29,6 +29,7 @@ LAN 上のどの端末からでも（マイクのセキュアコンテキスト�
 | 会話LLM | llama.cpp server（OpenAI互換） | LAN（既存サーバ） |
 | 作業エージェント | opencode serve | LAN（既存サーバ） |
 | TTS | VOICEVOX engine（GPU） | サーバ（compose） |
+| 音声入力（任意） | `dictation/` クライアント（exe・マイク＋打鍵） | **入力先の Windows / macOS** |
 
 ## クイックスタート（Docker Compose・推奨）
 
@@ -95,6 +96,46 @@ curl -F file=@sample.webm http://localhost:8000/api/transcribe
 # => {"text": "..."}
 ```
 webm/opus・wav・mp3 など（faster-whisper の PyAV デコードが扱える形式）を受け付ける。
+
+## 音声入力（アクティブウィンドウへ直接打ち込む）
+
+Web UI とは別に、**いま入力フォーカスがあるウィンドウへ音声で文字を打ち込む**
+ディクテーションクライアント（`dictation/`）を同梱している。文字起こしは上の
+`/api/transcribe`（faster-whisper）をそのまま使い、**サーバ側の変更は不要**。
+
+```
+[デスクトップOS: Windows / macOS]                    [voice-agent サーバ: WSL2 / Docker]
+  マイク ──► 無音で区切る(VAD) ──► WAV ──HTTP──►  faster-whisper (GPU)
+                                                          │
+  アクティブウィンドウ ◄── Unicode 打鍵 ◄── テキスト ◄─────┘
+```
+
+キーイベントの注入はアクティブウィンドウを持つデスクトップ上のプロセスからしか行えないため、
+サーバ（STT/GPU）はそのままに、**このクライアントだけを入力先の OS で動かす**。
+
+**単一 exe（Python のインストール不要）としてビルドできる**。PyInstaller はクロスコンパイル
+できないので、Windows の exe は Windows 上でビルドする:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File dictation\build-windows.ps1
+# → dist\voice-dictation.exe と dist\dictation.ini ができる
+# exe をダブルクリックで常駐。F13 を押している間だけ録音 → 離すと打ち込まれる
+```
+
+macOS は `.app` バンドルになり、Finder からダブルクリックで起動できる:
+
+```bash
+bash dictation/build-macos.sh
+# → dist/voice-dictation.app（Dock に出ない常駐アプリ。終了は ctrl+option+Q）
+```
+
+Python がある環境なら `pip install --group dictation` のうえ `python -m dictation` でも動く。
+
+押しっぱなしで話し続けると、**話の切れ目（既定 1.2 秒の無音）ごとに逐次入力**される。
+Whisper は非ストリーミングなので文字単位の逐次確定はできないが、セグメント単位で流し込むことで
+「話すそばから文字が入る」動きになる。
+
+詳細・チューニング・トラブルシュートは **[`dictation/README.md`](dictation/README.md)** を参照。
 
 ## 調整ポイント
 

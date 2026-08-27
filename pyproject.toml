@@ -39,6 +39,27 @@ cuda = [
     "nvidia-cublas-cu12",
     "nvidia-cudnn-cu12",
 ]
+# ── ディクテーションクライアント（dictation/）用 ──
+# サーバではなく **入力先のデスクトップ OS（Windows / macOS）** に入れる依存。
+# キー入力の注入はアクティブウィンドウを持つ OS 上のプロセスからしかできないため、
+# クライアントだけを Windows/macOS で動かし、STT はサーバの /api/transcribe を叩く。
+#   Windows: pip install --group dictation
+#   macOS  : pip install --group dictation --group dictation-macos
+dictation = [
+    "sounddevice>=0.4.6",  # マイク入力（PortAudio）
+    "numpy>=1.24",
+    "requests>=2.31",
+    "pynput>=1.7",         # グローバルなプッシュトゥトークキーの監視
+]
+# macOS で Unicode 打鍵（CGEvent）に必要
+dictation-macos = [
+    "pyobjc-framework-Quartz>=9.0",
+]
+# exe / 実行ファイルへのパッケージング（dictation/dictation.spec）。
+# PyInstaller はクロスコンパイルできないため、配布したい OS 上でビルドする。
+dictation-build = [
+    "pyinstaller>=6.0",
+]
 # ── 開発ツールのみ（runtime を include しない＝macOS で軽量に入る） ──
 dev = [
     "ruff",
@@ -60,7 +81,7 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 # ───────────────────────── mypy（型チェック・段階的strict） ─────────────────────────
 [tool.mypy]
 python_version = "3.12"
-files = ["core", "server", "config.py"]   # 本体のみ。train_local は対象外
+files = ["core", "server", "config.py", "dictation"]   # 本体のみ。train_local は対象外
 # 中程度strict のベースライン（まず green を作る。disallow_untyped_defs 等は次フェーズで ratchet）
 warn_redundant_casts = true
 warn_unused_ignores = true
@@ -82,5 +103,9 @@ module = [
     "dotenv",
     "opencode_ai",
     "opencode_ai.*",
+    "sounddevice",
+    "pynput",
+    "pynput.*",
+    "Quartz",
 ]
 ignore_missing_imports = true

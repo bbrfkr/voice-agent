@@ -1,0 +1,41 @@
+; voice-dictation.exe の設定ファイル。
+; exe と同じフォルダに `dictation.ini` という名前で置くと、引数なし（ダブルクリック）で
+; 起動したときの既定値になる。コマンドライン引数を渡した場合はそちらが優先される。
+; 文字コードは UTF-8 で保存すること。
+
+[dictation]
+; voice-agent サーバの URL。WSL2 のサーバなら localhost のままで届く。
+server = http://localhost:8000
+
+; プッシュトゥトークのキー（押している間だけ録音）。例: f13 / f9 / scroll_lock / ctrl_r
+key = f13
+
+; アプリを終了させるホットキー。macOS の .app には端末が付かず Ctrl+C が使えないため必須。
+; 空欄にすると無効。修飾キーは <ctrl> <alt> <shift> <cmd> で書く（macOS の option は <alt>）。
+quit_hotkey = <ctrl>+<alt>+q
+
+; 入力デバイス。空欄なら OS の既定マイク。番号は `voice-dictation.exe --list-devices` で確認。
+device =
+
+; セグメント間に挟む文字列。日本語は空のまま、英語なら半角スペースが自然。
+join =
+
+; ─── 無音区切り（VAD）───
+; 発話とみなす音量（RMS）。周囲がうるさければ上げる。
+threshold = 0.015
+; この長さ（ミリ秒）の無音が続いたら、そこまでを文字起こしして打ち込む。
+silence_ms = 1200
+; これ未満の発話は捨てる（クリック音・咳などの誤検出よけ）。
+min_speech_ms = 300
+; 区切りが来なくてもこの長さで強制的に送る。
+max_segment_ms = 15000
+
+; ─── 打鍵 ───
+; 1 文字ごとの待ち（ミリ秒）。文字が抜けるアプリがあれば 5〜10 にする。
+char_delay_ms = 0
+
+; true にすると話の切れ目で送らず、キーを離したときにまとめて打ち込む。
+no_split = false
+
+; true にすると認識結果をコンソールに表示しない。
+quiet = false

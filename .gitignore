@@ -24,3 +24,9 @@ openWakeWord/
 
 # faster-whisper(HuggingFace) の DL キャッシュ（compose が bind mount。数GB・再DL 可能）
 .cache/
+
+# ── dictation クライアントの exe ビルド生成物（PyInstaller） ──
+build/
+dist/
+# 各自の環境設定（dictation/dictation.ini.example をコピーして使う）
+dictation.ini
