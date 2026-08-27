@@ -38,7 +38,14 @@ powershell -ExecutionPolicy Bypass -File dictation\build-windows.ps1
 ```
 
 スクリプトが依存の導入（`sounddevice` / `pynput` / `requests` / `numpy` / `pyinstaller`）と
-ビルドをまとめて行う。出来上がるのは **単一 exe（約 30MB・Python のインストール不要）** と、
+ビルドをまとめて行う。Python が見つからない場合や pip が失敗した場合は、その場で止まって
+理由を表示する。
+
+> **`build-windows.ps1` は UTF-8 (BOM 付き) で保存すること。** Windows PowerShell 5.1 は
+> BOM が無いとスクリプトを CP932 として読むため、日本語コメントが文字化けして構文エラーになる
+> （`.gitattributes` で CRLF 固定にしてあるが、エディタで BOM を落とさないよう注意）。
+
+出来上がるのは **単一 exe（約 30MB・Python のインストール不要）** と、
 その隣に置かれる設定ファイル `dictation.ini`。
 
 ```
@@ -184,6 +191,7 @@ IME の ON/OFF に関係なく確定済みの文字がそのまま入る。
 | .app が起動しているか分からない | Dock に出ない設計。`~/Library/Logs/voice-dictation.log` を見る |
 | .app を終了できない | 終了ホットキー（既定 `ctrl+option+Q`）。効かなければ `killall voice-dictation` |
 | 再ビルドしたら許可が外れた | ad-hoc 署名を忘れている。`codesign --force --deep --sign - dist/voice-dictation.app` |
+| ビルドスクリプトが構文エラーになる | `build-windows.ps1` の BOM が落ちている。UTF-8 (BOM 付き) で保存し直す（下記） |
 
 ## 構成
 

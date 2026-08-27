@@ -1,0 +1,8 @@
+# 改行コードの取り違えで壊れるファイルを固定する。
+# PowerShell スクリプトは CRLF（Windows PowerShell 5.1 向け。BOM も含めてそのまま保つ）。
+*.ps1 text eol=crlf
+# シェルスクリプトは LF。CRLF になるとシバンが壊れて実行できない。
+*.sh text eol=lf
+# アイコンはバイナリ（テキスト変換させない）
+*.ico binary
+*.icns binary
