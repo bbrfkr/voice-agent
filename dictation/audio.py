@@ -25,6 +25,15 @@ FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000
 
 
 @dataclass
+class SegmentStats:
+    """1 回の録音で実際に何が観測されたか（「無反応」の原因表示に使う）。"""
+
+    max_rms: float = 0.0  # 観測された最大音量
+    speech_ms: int = 0  # しきい値を超えていた合計時間
+    total_ms: int = 0  # 溜め込んだ音声の長さ
+
+
+@dataclass
 class VadParams:
     """無音区切りのパラメータ（既定値は Web UI の VAD と同じ）。"""
 
@@ -71,18 +80,30 @@ class Segmenter:
         self._buf: list[np.ndarray] = []
         self._speech_frames = 0
         self._silence_frames = 0
+        self._max_rms = 0.0
+        self.last_level = 0.0  # 直近フレームの音量（レベルメータ表示用）
+        #: 直近の切り出しで観測された値（採用・不採用にかかわらず更新される）
+        self.last = SegmentStats()
 
     def reset(self) -> None:
         self._buf = []
         self._speech_frames = 0
         self._silence_frames = 0
+        self._max_rms = 0.0
 
     @property
     def _silence_limit(self) -> int:
         return max(1, self.p.silence_ms // FRAME_MS)
 
+    def level(self, frame: np.ndarray) -> float:
+        """フレームの音量を返しつつ、そのセグメントの最大値として記録する。"""
+        rms = _rms(frame)
+        self._max_rms = max(self._max_rms, rms)
+        self.last_level = rms
+        return rms
+
     def feed(self, frame: np.ndarray) -> bytes | None:
-        loud = _rms(frame) >= self.p.threshold
+        loud = self.level(frame) >= self.p.threshold
         if not loud and self._speech_frames == 0:
             # まだ一度も声が出ていない先頭の無音は溜めない（無駄に長い音声を送らない）
             return None
@@ -104,6 +125,11 @@ class Segmenter:
         return self._cut()
 
     def _cut(self) -> bytes | None:
+        self.last = SegmentStats(
+            max_rms=self._max_rms,
+            speech_ms=self._speech_frames * FRAME_MS,
+            total_ms=len(self._buf) * FRAME_MS,
+        )
         if self._speech_frames * FRAME_MS < self.p.min_speech_ms:
             self.reset()
             return None
@@ -164,6 +190,23 @@ def list_devices() -> str:
     return str(sd.query_devices())
 
 
+class RecorderEvents:
+    """録音の進行状況を受け取るフック。既定はすべて何もしない。
+
+    「キーを押しても無反応」がどの段階で起きているのか（キーが拾えていない／音が小さい／
+    送信していない）を切り分けられるよう、各段階を外から観測できるようにしている。
+    """
+
+    def started(self) -> None:
+        """PTT が押されて録音を開始した。"""
+
+    def level(self, rms: float) -> None:
+        """録音中の音量（間引いて呼ばれる）。"""
+
+    def stopped(self, stats: SegmentStats, produced: int) -> None:
+        """PTT が離された。produced はこの押下で送ったセグメント数。"""
+
+
 class Recorder:
     """マイクフレームを読み、録音中だけセグメント化して `on_segment` へ渡す。
 
@@ -171,11 +214,22 @@ class Recorder:
     録音していない間のフレームは捨てるので、押していない時間の音は一切送られない。
     """
 
-    def __init__(self, mic: MicStream, params: VadParams, on_segment: Callable[[bytes, bool], None]) -> None:
+    #: レベル通知を間引く間隔（フレーム数）。30ms × 8 ≒ 0.24 秒ごと。
+    LEVEL_EVERY = 8
+
+    def __init__(
+        self,
+        mic: MicStream,
+        params: VadParams,
+        on_segment: Callable[[bytes, bool], None],
+        events: RecorderEvents | None = None,
+    ) -> None:
         self.mic = mic
         self.seg = Segmenter(params)
         self.on_segment = on_segment  # (WAV, その録音での 1 本目か) を受け取る
+        self.events = events or RecorderEvents()
         self._nth = 0  # 1 回の押下の中で何本目のセグメントか
+        self._frames_since_level = 0
         self._recording = False  # 消費スレッドだけが触る（マーカー受信で切り替わる）
         self._requested = False  # 呼び出し側から見た要求状態（キーリピートの抑止用）
         self._stop = threading.Event()
@@ -206,14 +260,21 @@ class Recorder:
                 if item == "start":
                     self.seg.reset()
                     self._nth = 0
+                    self._frames_since_level = 0
                     self._recording = True
+                    self.events.started()
                 else:
                     self._recording = False
                     self._emit(self.seg.flush())
+                    self.events.stopped(self.seg.last, self._nth)
                 continue
             if not self._recording:
                 continue  # 録音していない間のマイク入力は捨てる
             self._emit(self.seg.feed(item))
+            self._frames_since_level += 1
+            if self._frames_since_level >= self.LEVEL_EVERY:
+                self._frames_since_level = 0
+                self.events.level(self.seg.last_level)
 
     def _emit(self, wav: bytes | None) -> None:
         if wav:

@@ -67,6 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--char-delay-ms", type=int, default=0, help="1 文字ごとの待ち ms（取りこぼすアプリ向け。既定: 0）")
     p.add_argument("--join", default="", help="セグメント間に挟む文字列（英語なら ' ' が自然。既定: 空）")
     p.add_argument("--quiet", action="store_true", help="認識結果をコンソールに出さない")
+    p.add_argument("--debug", action="store_true", help="録音中の音量を逐次表示する（しきい値の調整用）")
+    p.add_argument("--no-selftest", action="store_true", help="起動時のサーバ疎通確認を省略する")
     g = p.add_argument_group("無音区切り（VAD）")
     g.add_argument("--threshold", type=float, default=VadParams.threshold, help="発話とみなす RMS しきい値")
     g.add_argument("--silence-ms", type=int, default=VadParams.silence_ms, help="この無音が続いたら区切って送る")
@@ -86,21 +88,44 @@ def _device(value: str | None) -> int | str | None:
     return int(value) if value.isdigit() else value
 
 
+def _device_name(value: str | None) -> str:
+    """起動時の表示用に、実際に使われる入力デバイス名を引く。"""
+    try:
+        import sounddevice as sd
+
+        info = sd.query_devices(_device(value), "input")
+        return f"{info['name']}（{info['max_input_channels']}ch）"
+    except Exception as e:
+        return f"取得できません（{type(e).__name__}: {e}）"
+
+
+def _clean_argv(argv: list[str] | None) -> list[str]:
+    """macOS が Finder 起動時に渡してくる `-psn_0_XXXXX` を取り除く。
+
+    LaunchServices はアプリのプロセスシリアル番号をコマンドライン引数として渡すことがあり、
+    そのままだと argparse が「未知の引数」として起動を拒否してしまう（.app には端末が
+    無いのでエラーも見えない）。
+    """
+    raw = sys.argv[1:] if argv is None else argv
+    return [a for a in raw if not a.startswith("-psn_")]
+
+
 def _parse(argv: list[str] | None) -> argparse.Namespace:
     """dictation.ini を既定値に敷いた上でコマンドライン引数を解釈する。
 
     --config だけを先に読む必要があるので、2 段階で解釈している。
     """
+    args = _clean_argv(argv)
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config", default=None)
-    known, _ = pre.parse_known_args(argv)
+    known, _ = pre.parse_known_args(args)
 
     parser = build_parser()
     path = find_config(known.config)
     if path is not None:
         parser.set_defaults(**load_config(path))
         print(f"設定ファイル: {path}")
-    return parser.parse_args(argv)
+    return parser.parse_args(args)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -140,7 +165,8 @@ def main(argv: list[str] | None = None) -> int:
 
     client = TranscribeClient(args.server)
     mic = MicStream(device=_device(args.device))
-    app = Dictation(client, injector, mic, vad, RunnerOptions(join=args.join, quiet=args.quiet))
+    options = RunnerOptions(join=args.join, quiet=args.quiet, key_name=args.key, debug=args.debug)
+    app = Dictation(client, injector, mic, vad, options)
 
     try:
         ptt = PttListener(args.key, app.press, app.release)
@@ -150,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     print(f"サーバ: {client.url}")
+    print(f"マイク: {_device_name(args.device)}")
     print(f"プッシュトゥトーク: {args.key} を押している間だけ録音します")
     if quit_key is not None:
         print(f"終了: {quit_key.combo}（端末があれば Ctrl+C でも可）")
@@ -157,6 +184,16 @@ def main(argv: list[str] | None = None) -> int:
         print("※ --dry-run: 実際の打鍵はせず表示するだけです")
     if log is not None:
         print(f"ログ: {log}")
+
+    # 経路が生きているかを起動時に確かめる（無音を 1 回投げるだけ）。
+    # 「押しても何も起きない」の原因がサーバ側かどうかを、話す前に切り分けられる。
+    if not args.no_selftest:
+        problem = client.selftest()
+        if problem is None:
+            print("サーバ疎通: OK")
+        else:
+            print(f"! サーバ疎通に失敗: {problem}")
+            print("  このまま起動しますが、話しても文字は入りません。--server の値を確認してください。")
 
     try:
         with mic.open():

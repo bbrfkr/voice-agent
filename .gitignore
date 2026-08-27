@@ -28,5 +28,7 @@ openWakeWord/
 # ── dictation クライアントの exe ビルド生成物（PyInstaller） ──
 build/
 dist/
+# ビルド用の仮想環境（build-macos.sh が作る）
+.venv-build/
 # 各自の環境設定（dictation/dictation.ini.example をコピーして使う）
 dictation.ini

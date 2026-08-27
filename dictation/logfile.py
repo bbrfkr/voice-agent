@@ -51,7 +51,9 @@ def setup(force: bool = False) -> Path | None:
             reconfigure = getattr(stream, "reconfigure", None)
             if reconfigure is not None:
                 with contextlib.suppress(Exception):
-                    reconfigure(line_buffering=True)
+                    # errors="replace": CP932 コンソールへリダイレクトされたときに、
+                    # 変換できない文字で UnicodeEncodeError を出して落ちないようにする。
+                    reconfigure(line_buffering=True, errors="replace")
         return None
     path = log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,7 +61,7 @@ def setup(force: bool = False) -> Path | None:
         path.unlink()
     # プロセスが終わるまで開きっぱなしにする（with で閉じてはいけない）。
     # 行バッファリングにして、強制終了されても直前までの出力が残るようにする。
-    stream = open(path, "a", encoding="utf-8", buffering=1)  # noqa: SIM115
+    stream = open(path, "a", encoding="utf-8", errors="replace", buffering=1)  # noqa: SIM115
     sys.stdout = stream
     sys.stderr = stream
     return path

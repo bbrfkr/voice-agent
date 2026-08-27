@@ -50,6 +50,7 @@ KEYS: dict[str, tuple[str, Callable[[str], Any]]] = {
     "max_segment_ms": ("max_segment_ms", int),
     "no_split": ("no_split", _to_bool),
     "quit_hotkey": ("quit_hotkey", str),
+    "debug": ("debug", _to_bool),
 }
 
 

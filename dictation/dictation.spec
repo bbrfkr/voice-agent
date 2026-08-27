@@ -34,7 +34,9 @@ for pkg in ("sounddevice", "_sounddevice_data"):
 if sys.platform == "win32":
     hiddenimports = ["pynput.keyboard._win32", "pynput.mouse._win32"]
 elif sys.platform == "darwin":
-    hiddenimports = ["pynput.keyboard._darwin", "pynput.mouse._darwin"]
+    # Quartz（pyobjc）は打鍵バックエンドが関数内で import するうえ、pyobjc 自体が
+    # サブモジュールを動的に解決するため、明示しておかないと取りこぼすことがある。
+    hiddenimports = ["pynput.keyboard._darwin", "pynput.mouse._darwin", "Quartz"]
 else:
     hiddenimports = []
 
